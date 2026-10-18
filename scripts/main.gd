@@ -144,6 +144,7 @@ func _build_world() -> void:
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY; e.ambient_light_energy = 0.9
 	e.fog_enabled = true; e.fog_mode = Environment.FOG_MODE_DEPTH; e.fog_light_color = Color("CDEFFF"); e.fog_depth_begin = 300.0; e.fog_depth_end = 1200.0; e.fog_density = 0.6; e.fog_sky_affect = 0.0
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.tonemap_exposure = 0.8   # user: scene read too bright
 	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
 		# Compatibility (web) ignores the sky ambient energy and floods flat surfaces with sky blue, and its sun reads brighter;
 		# a fixed ambient colour and a weaker sun match the Forward+ look.
@@ -159,7 +160,9 @@ func _start() -> void:
 	match_node.start()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if state == State.PREGAME and (event.is_action_pressed("start") or event is InputEventScreenTouch):
+	# any key starts, so keyboard players pressing WASD/arrows are not stuck on the start screen
+	var any_key: bool = event is InputEventKey and event.pressed and not event.echo and not event.is_action("pause")
+	if state == State.PREGAME and (any_key or event.is_action_pressed("start") or event is InputEventScreenTouch):
 		_start()
 	elif state == State.ENDED and (event.is_action_pressed("start") or (event is InputEventScreenTouch and event.pressed)):
 		get_tree().reload_current_scene()

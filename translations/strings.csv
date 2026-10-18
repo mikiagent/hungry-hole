@@ -1,6 +1,6 @@
 keys,en
 TXT_PLAY,PLAY
-TXT_TAP_TO_START,Tap to start
+TXT_TAP_TO_START,Tap or press any key to start
 TXT_DRAG_TO_MOVE,"DRAG TO MOVE, EAT & GROW!"
 TXT_GAME_LEVEL,Size %d
 TXT_GAME_SIZE_MAX,Size Max!
@@ -9,7 +9,7 @@ TXT_GAME_OVER_EATEN,EATEN
 TXT_GAME_OVER_VICTORY,VICTORY
 TXT_GAME_EATEN_BY,You were swallowed by %s
 TXT_GAME_RANKING,Ranking
-TXT_TAP_CONTINUE,Tap to continue
+TXT_TAP_CONTINUE,Tap or press Space to continue
 TXT_PAUSED,Paused
 TXT_RESUME,Resume
 TXT_SOUND,Sound
