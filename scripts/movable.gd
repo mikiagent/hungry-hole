@@ -37,6 +37,7 @@ func _physics_process(delta: float) -> void:
 				dir = Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized(); speed = WALK_SPEED if randf() < 0.7 else 0.0
 				fo.is_fleeing = false
 		v = speed
+	bounds = match_ref.map_bounds
 	var p := fo.global_position + dir * v * delta
 	# keep inside walls; cars wrap to the other side of their lane, people bounce
 	if p.x < bounds.position.x + 2 or p.x > bounds.end.x - 2 or p.z < bounds.position.y + 2 or p.z > bounds.end.y - 2:

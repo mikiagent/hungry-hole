@@ -21,6 +21,8 @@ var is_dead := false
 var rank := 1
 var mass_collected := 0.0
 var kills := 0
+var lives := 3
+var protected_until := 0.0
 var desired_dir := Vector3.ZERO
 var input_mag := 0.0
 var movement: HoleMovement
@@ -277,14 +279,18 @@ func die(killer) -> void:
 	tw.chain().tween_callback(func(): visible = false)
 	died.emit(killer)
 
-func respawn(at: Vector3) -> void:
+## Respawn keeps level and XP (user: respawn at the same size they died) and grants brief spawn protection.
+func respawn(at: Vector3, protection: float = 2.0) -> void:
 	is_dead = false
-	xp = 0
 	global_position = Vector3(at.x, 0.0, at.z)
-	set_level(1, true)
+	set_level(level, true)
 	visible = true
 	name_label.modulate.a = 1.0
 	eat_trigger.monitoring = true
+	protected_until = Time.get_ticks_msec() / 1000.0 + protection
+
+func is_protected() -> bool:
+	return Time.get_ticks_msec() / 1000.0 < protected_until
 
 ## Put the name on the hole's far rim as seen from the camera: horizontally centered, just above the ring on screen.
 func _place_label() -> void:
@@ -318,6 +324,7 @@ func set_crown(on: bool) -> void:
 
 func _process(delta: float) -> void:
 	_place_label()
+	ring.visible = not is_protected() or int(Time.get_ticks_msec() / 120) % 2 == 0
 	if crown.visible:
 		crown.rotate_y(delta * 1.5)
 

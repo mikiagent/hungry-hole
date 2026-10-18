@@ -3,8 +3,8 @@ extends Node3D
 ## Builds a city on a 5 m grid: roads, sidewalks, blocks with stacked buildings, props, cars, people.
 ## Targets from 03-systems/maps-and-city.md: footprint ~250x300 m, ~2,500 objects, mostly size 1.
 const TILE := 5.0
-@export var tiles_x: int = 96
-@export var tiles_z: int = 108
+@export var tiles_x: int = 140
+@export var tiles_z: int = 152
 @export var block_tiles: int = 6      # block size incl. 2-tile road
 @export var seed_value: int = 0
 @export var tiers: ObjectPhysicsTiers
@@ -28,6 +28,18 @@ var spawn_groups: Array = []
 var object_count := 0
 var total_points := 0
 var _tile_kind := {}   # Vector2i -> "road"|"side"|"block"|"park"
+## Zones: rings by normalized distance from the centre. Only unlocked rings have objects; the next ring spawns
+## in once UNLOCK_FRACTION of everything spawned so far has been eaten (user: larger map, zones that spawn in).
+const ZONE_EDGES := [0.4, 0.7, 1.0]
+const UNLOCK_FRACTION := 0.3
+const TILES_PER_FRAME := 220
+signal zone_unlocked(index: int, rect: Rect2)
+var zone_index := 0
+var eaten_count := 0
+var spawned_count := 0
+var _pending: Array = []
+var _walls: StaticBody3D
+var _barrier: Array[MeshInstance3D] = []
 ## Tripo-generated GLBs (normalized to ~1 unit). scale = world size of the longest axis class.
 const MODELS := {
 	"apartment": {"path": "res://assets/tripo/apartment_v3.glb", "scale": 12.0, "size": 7, "pts": 7, "type": 3},
@@ -35,6 +47,15 @@ const MODELS := {
 	"apartment_tall": {"path": "res://assets/tripo/apartment_v3.glb", "scale": 18.0, "size": 9, "pts": 10, "type": 3},
 	"skyscraper_tall": {"path": "res://assets/tripo/skyscraper_v3.glb", "scale": 42.0, "size": 13, "pts": 16, "type": 3},
 	"tower_mega": {"path": "res://assets/tripo/skyscraper_v3.glb", "scale": 64.0, "size": 16, "pts": 25, "type": 3},
+	"house": {"path": "res://assets/tripo/house.glb", "scale": 8.0, "size": 7, "pts": 7, "type": 3},
+	"cone": {"path": "res://assets/tripo/cone.glb", "scale": 0.75, "size": 1, "pts": 1, "type": 0},
+	"bin": {"path": "res://assets/tripo/bin.glb", "scale": 1.0, "size": 1, "pts": 1, "type": 0},
+	"hydrant": {"path": "res://assets/tripo/hydrant.glb", "scale": 0.8, "size": 1, "pts": 1, "type": 0},
+	"bush": {"path": "res://assets/tripo/bush.glb", "scale": 1.5, "size": 2, "pts": 2, "type": 0},
+	"planter": {"path": "res://assets/tripo/planter.glb", "scale": 1.1, "size": 1, "pts": 1, "type": 0},
+	"cardbox": {"path": "res://assets/tripo/cardbox.glb", "scale": 0.6, "size": 1, "pts": 1, "type": 0},
+	"dumpster": {"path": "res://assets/tripo/dumpster.glb", "scale": 2.0, "size": 2, "pts": 2, "type": 0},
+	"mailbox": {"path": "res://assets/tripo/mailbox.glb", "scale": 1.1, "size": 1, "pts": 1, "type": 0},
 	"tree": {"path": "res://assets/tripo/tree_v3.glb", "scale": 3.2, "size": 2, "pts": 2, "type": 0},
 	"tree_small": {"path": "res://assets/tripo/tree_v3.glb", "scale": 2.0, "size": 1, "pts": 1, "type": 0},
 	"lamp": {"path": "res://assets/tripo/lamp_v2.glb", "scale": 3.4, "size": 1, "pts": 1, "type": 0},
@@ -116,14 +137,53 @@ func sphere_mesh(r: float) -> SphereMesh:
 func build() -> void:
 	_rng.seed = seed_value if seed_value != 0 else randi()
 	var w := tiles_x * TILE; var d := tiles_z * TILE
-	bounds = Rect2(-w / 2.0, -d / 2.0, w, d)
 	_build_ground(w, d)
 	_layout_tiles()
 	_build_tiles()
-	_build_walls(w, d)
-	_populate()
+	bounds = zone_rect(0)
+	_build_walls()
+	for key in _tile_kind:
+		if zone_of(key) == 0: _populate_tile(key)
 	_place_landmarks()
 	_make_spawn_groups()
+	spawned_count = object_count
+	Events.object_captured.connect(_on_captured)
+	set_process(false)
+
+func zone_of(key: Vector2i) -> int:
+	var nx: float = absf(key.x + 0.5 - tiles_x / 2.0) / (tiles_x / 2.0); var nz: float = absf(key.y + 0.5 - tiles_z / 2.0) / (tiles_z / 2.0)
+	var z: float = maxf(nx, nz)
+	for i in ZONE_EDGES.size():
+		if z <= ZONE_EDGES[i]: return i
+	return ZONE_EDGES.size() - 1
+
+func zone_rect(i: int) -> Rect2:
+	var e: float = ZONE_EDGES[i]
+	var hw := tiles_x * TILE * 0.5 * e; var hd := tiles_z * TILE * 0.5 * e
+	return Rect2(-hw, -hd, hw * 2.0, hd * 2.0)
+
+func _on_captured(_hole, _fo, _p, _x) -> void:
+	eaten_count += 1
+	if _pending.is_empty() and zone_index < ZONE_EDGES.size() - 1 and eaten_count >= spawned_count * UNLOCK_FRACTION:
+		_unlock_next_zone()
+
+func _unlock_next_zone() -> void:
+	zone_index += 1
+	for key in _tile_kind:
+		if zone_of(key) == zone_index: _pending.append(key)
+	set_process(true)
+
+## Spawn the new ring a slice per frame so unlocking never hitches, then open the walls.
+func _process(_delta: float) -> void:
+	var n := 0
+	while not _pending.is_empty() and n < TILES_PER_FRAME:
+		_populate_tile(_pending.pop_back()); n += 1
+	if _pending.is_empty():
+		set_process(false)
+		spawned_count = object_count
+		bounds = zone_rect(zone_index)
+		_place_walls(bounds)
+		zone_unlocked.emit(zone_index, bounds)
 
 func _build_ground(w: float, d: float) -> void:
 	var g := MeshInstance3D.new()
@@ -194,24 +254,26 @@ func _fill_mm(mmi: MultiMeshInstance3D, xforms: Array[Transform3D]) -> void:
 	mmi.multimesh.instance_count = xforms.size()
 	for i in xforms.size(): mmi.multimesh.set_instance_transform(i, xforms[i])
 
-func _build_walls(w: float, d: float) -> void:
-	var walls := StaticBody3D.new(); walls.collision_layer = 1 << 2; walls.collision_mask = 0
+func _build_walls() -> void:
+	_walls = StaticBody3D.new(); _walls.collision_layer = 1 << 2; _walls.collision_mask = 0
 	for side in 4:
-		var cs := CollisionShape3D.new(); var bs := BoxShape3D.new()
+		var cs := CollisionShape3D.new(); cs.shape = BoxShape3D.new(); _walls.add_child(cs)
+		var bar := MeshInstance3D.new(); bar.mesh = BoxMesh.new(); bar.material_override = mat("cone"); bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(bar); _barrier.append(bar)
+	add_child(_walls)
+	_place_walls(bounds)
+
+func _place_walls(r: Rect2) -> void:
+	var w := r.size.x; var d := r.size.y
+	for side in 4:
+		var cs := _walls.get_child(side) as CollisionShape3D
 		var vertical := side < 2
-		bs.size = Vector3(1.0, 20.0, d + 2) if vertical else Vector3(w + 2, 20.0, 1.0)
-		cs.shape = bs
-		cs.position = Vector3((w / 2.0 + 0.5) * (1 if side == 0 else -1), 10, 0) if vertical else Vector3(0, 10, (d / 2.0 + 0.5) * (1 if side == 2 else -1))
-		walls.add_child(cs)
-	add_child(walls)
-	# low brick wall ring (eatable, size 3) like the original's Boundarie_S_BrickWall
-	var step := 5.0
-	for x in range(int(-w / 2 + 2.5), int(w / 2), int(step)):
-		_prop_box("brick", Vector3(x, 0, -d / 2 + 1.0), Vector3(4.6, 1.2, 0.8), "b_coral2", 3, 1)
-		_prop_box("brick", Vector3(x, 0, d / 2 - 1.0), Vector3(4.6, 1.2, 0.8), "b_coral2", 3, 1)
-	for z in range(int(-d / 2 + 2.5), int(d / 2), int(step)):
-		_prop_box("brick", Vector3(-w / 2 + 1.0, 0, z), Vector3(0.8, 1.2, 4.6), "b_coral2", 3, 1)
-		_prop_box("brick", Vector3(w / 2 - 1.0, 0, z), Vector3(0.8, 1.2, 4.6), "b_coral2", 3, 1)
+		(cs.shape as BoxShape3D).size = Vector3(1.0, 40.0, d + 2) if vertical else Vector3(w + 2, 40.0, 1.0)
+		var pos := Vector3((w / 2.0 + 0.5) * (1 if side == 0 else -1), 20, 0) if vertical else Vector3(0, 20, (d / 2.0 + 0.5) * (1 if side == 2 else -1))
+		cs.position = pos
+		var bar := _barrier[side]
+		(bar.mesh as BoxMesh).size = Vector3(0.6, 0.8, d + 0.6) if vertical else Vector3(w + 0.6, 0.8, 0.6)
+		bar.position = Vector3(pos.x, 0.4, pos.z)
 
 func _new_object(nm: String, pos: Vector3, size_req: int, pts: int, type: int, height: float) -> FallingObject:
 	pts = clampi(maxi(pts, size_req), 1, 25)   # bigger things are worth more, capped at the original's 25 (mega tower)
@@ -229,6 +291,7 @@ func _new_object(nm: String, pos: Vector3, size_req: int, pts: int, type: int, h
 func _fit_level(footprint: Vector2) -> int:
 	return _balance.level_for_footprint(footprint.length())
 
+## Debug/test helper only (edge test). The city itself uses real models exclusively.
 func _prop_box(nm: String, pos: Vector3, sz: Vector3, color: String, size_req: int, pts: int, type: int = 0, yaw := 0.0) -> FallingObject:
 	var fo := _new_object(nm, pos + Vector3(0, sz.y / 2, 0), _fit_level(Vector2(sz.x, sz.z)), pts, type, sz.y)
 	fo.footprint_half = maxf(sz.x, sz.z) * 0.5
@@ -238,143 +301,68 @@ func _prop_box(nm: String, pos: Vector3, sz: Vector3, color: String, size_req: i
 	var cs := CollisionShape3D.new(); var bs := BoxShape3D.new(); bs.size = sz; cs.shape = bs; fo.add_child(cs)
 	return fo
 
-func _prop_tree(pos: Vector3, big: bool) -> void:
-	var h := 2.6 if big else 1.8
-	var fo := _new_object("tree", pos + Vector3(0, h / 2, 0), 2 if big else 1, 2 if big else 1, 0, h)
-	var trunk := MeshInstance3D.new(); trunk.mesh = cyl_mesh(0.18, h * 0.5); trunk.material_override = mat("trunk"); trunk.position.y = -h / 2 + h * 0.25; fo.add_child(trunk)
-	var canopy := MeshInstance3D.new(); canopy.mesh = sphere_mesh(1.1 if big else 0.75); canopy.material_override = mat("leaf"); canopy.position.y = h * 0.2; fo.add_child(canopy)
-	var cs := CollisionShape3D.new(); var bs := BoxShape3D.new(); bs.size = Vector3(1.6 if big else 1.1, h, 1.6 if big else 1.1); cs.shape = bs; fo.add_child(cs)
-
-func _prop_lamp(pos: Vector3) -> void:
-	var fo := _new_object("lamp", pos + Vector3(0, 1.6, 0), 1, 1, 0, 3.2)
-	var pole := MeshInstance3D.new(); pole.mesh = cyl_mesh(0.08, 3.0); pole.material_override = mat("metal"); fo.add_child(pole)
-	var head := MeshInstance3D.new(); head.mesh = box_mesh(Vector3(0.5, 0.25, 0.5)); head.material_override = mat("window"); head.position.y = 1.55; fo.add_child(head)
-	var cs := CollisionShape3D.new(); var bs := BoxShape3D.new(); bs.size = Vector3(0.5, 3.2, 0.5); cs.shape = bs; fo.add_child(cs)
-
-func _prop_person(pos: Vector3) -> void:
-	var fo := _new_object("person", pos + Vector3(0, 0.6, 0), 1, 1, 1, 1.2)
-	var body := MeshInstance3D.new(); body.mesh = box_mesh(Vector3(0.45, 0.6, 0.3)); body.material_override = mat(["b_mint", "b_sky", "b_coral", "b_sun", "b_grape"].pick_random()); body.position.y = -0.2; fo.add_child(body)
-	var head := MeshInstance3D.new(); head.mesh = sphere_mesh(0.3); head.material_override = mat(["skin", "skin2", "skin3"].pick_random()); head.position.y = 0.4; fo.add_child(head)
-	var cs := CollisionShape3D.new(); var bs := BoxShape3D.new(); bs.size = Vector3(0.6, 1.2, 0.6); cs.shape = bs; fo.add_child(cs)
-
-func _prop_car(pos: Vector3, yaw: float) -> void:
-	var col: String = ["taxi", "car_red", "car_blue", "truck"].pick_random()
-	var is_truck := col == "truck"
-	var sz := Vector3(2.0, 1.0, 4.2) if not is_truck else Vector3(2.2, 1.6, 5.0)
-	var fo := _prop_box("car", pos, sz, col, 2, 3 if is_truck else 2, 2, yaw)
-	for sx in [-1, 1]:
-		for sz2 in [-1, 1]:
-			var wh := MeshInstance3D.new(); wh.mesh = cyl_mesh(0.35, 0.3); wh.material_override = mat("tire")
-			wh.rotation.z = PI / 2; wh.position = Vector3(sx * (sz.x / 2), -sz.y / 2 + 0.35, sz2 * (sz.z / 2 - 0.9)); fo.add_child(wh)
-	var cab := MeshInstance3D.new(); cab.mesh = box_mesh(Vector3(sz.x * 0.8, 0.6, sz.z * 0.4)); cab.material_override = mat("window"); cab.position.y = sz.y / 2 + 0.3; fo.add_child(cab)
-
-func _building_stack(pos: Vector3, stories: int, hue: String) -> void:
-	# city_appartments_M_base/story/roof: each segment size 5 / 1 point, stacked and linked (domino)
-	var prev: FallingObject = null
-	var fp := 4.0
-	for i in stories + 1:
-		var is_roof := i == stories
-		var h := 0.6 if is_roof else 3.0
-		var y := i * 3.0
-		var color := "roof" if is_roof else (hue if i % 2 == 0 else hue + "2")
-		var seg := _prop_box("apt", pos + Vector3(0, y, 0), Vector3(fp if not is_roof else fp * 0.9, h, fp if not is_roof else fp * 0.9), color, 5, 1, 3)
-		if not is_roof:
-			for side in 4:
-				var win := MeshInstance3D.new(); win.mesh = box_mesh(Vector3(0.7, 0.9, 0.1)); win.material_override = mat("window")
-				win.rotation.y = side * PI / 2; win.position = Vector3(0, 0.2, fp / 2 + 0.02).rotated(Vector3.UP, side * PI / 2); seg.add_child(win)
-		if prev: prev.stack_above = seg
-		prev = seg
-
-func _skyscraper(pos: Vector3) -> void:
-	var segs := [Vector3(7, 10, 7), Vector3(6, 8, 6), Vector3(5, 6, 5)]
-	var y := 0.0; var prev: FallingObject = null
-	for i in segs.size():
-		var s: Vector3 = segs[i]
-		var seg := _prop_box("tower", pos + Vector3(0, y, 0), s, "b_sky" if i % 2 == 0 else "b_sky2", 10 if i == 0 else 9, 10 if i == 0 else 7, 3)
-		if prev: prev.stack_above = seg
-		prev = seg; y += s.y
-	var top := _prop_box("tower_top", pos + Vector3(0, y, 0), Vector3(1.0, 3.0, 1.0), "dark", 7, 3, 3)
-	if prev: prev.stack_above = top
-
-func _m_building(pos: Vector3) -> void:
-	var hue: String = ["b_sun", "b_mint", "b_grape", "b_coral"].pick_random()
-	var base := _prop_box("mbuilding", pos, Vector3(8, 6, 8), hue, 7, 7, 3)
-	var roof := _prop_box("mroof", pos + Vector3(0, 6, 0), Vector3(7.4, 0.6, 7.4), "roof", 5, 1, 3)
-	base.stack_above = roof
-
-func _populate() -> void:
+func _populate_tile(key: Vector2i) -> void:
 	var cx := tiles_x / 2; var cz := tiles_z / 2
-	for key in _tile_kind:
-		var p := _tile_pos(key.x, key.y)
-		var kind: String = _tile_kind[key]
-		var nx: float = absf(key.x - cx) / float(tiles_x / 2); var nz: float = absf(key.y - cz) / float(tiles_z / 2)
-		var zone: float = maxf(nx, nz)
-		var downtown: bool = zone < 0.22
-		var midtown: bool = zone < 0.45
-		match kind:
-			"block":
-				var r := _rng.randf()
-				var bx: int = key.x % block_tiles; var bz: int = key.y % block_tiles
-				var anchor: bool = (bx % 2 == 1) and (bz % 2 == 1)   # big footprints every other tile (10 m spacing)
-				if anchor:
-					var hue: String = ["b_coral", "b_sun", "b_mint", "b_sky", "b_grape"].pick_random()
-					if downtown:
-						if r < 0.3: _prop_model("skyscraper_tall", p, [0.0, PI / 2].pick_random())
-						elif r < 0.55: _prop_model("skyscraper", p, [0.0, PI / 2].pick_random())
-						elif r < 0.75: _prop_model("apartment_tall", p, [0.0, PI / 2, PI, -PI / 2].pick_random())
-						else: _building_stack(p, _rng.randi_range(5, 7), hue)
-					elif midtown:
-						if r < 0.15: _prop_model("skyscraper", p, [0.0, PI / 2].pick_random())
-						elif r < 0.35: _prop_model("apartment_tall", p, [0.0, PI / 2, PI, -PI / 2].pick_random())
-						elif r < 0.65: _prop_model("apartment", p, [0.0, PI / 2, PI, -PI / 2].pick_random())
-						else: _building_stack(p, _rng.randi_range(3, 5), hue)
-					else:
-						if r < 0.5: _prop_model("apartment", p, [0.0, PI / 2, PI, -PI / 2].pick_random())
-						else: _building_stack(p, _rng.randi_range(2, 4), hue)
+	var p := _tile_pos(key.x, key.y)
+	var kind: String = _tile_kind[key]
+	var nx: float = absf(key.x - cx) / float(tiles_x / 2); var nz: float = absf(key.y - cz) / float(tiles_z / 2)
+	var zone: float = maxf(nx, nz)
+	var downtown: bool = zone < 0.12
+	var midtown: bool = zone < 0.3
+	var j := func(a: float) -> Vector3: return p + Vector3(_rng.randf_range(-a, a), 0, _rng.randf_range(-a, a))
+	var yaw4: float = [0.0, PI / 2, PI, -PI / 2].pick_random()
+	match kind:
+		"block":
+			var r := _rng.randf()
+			var bx: int = key.x % block_tiles; var bz: int = key.y % block_tiles
+			var anchor: bool = (bx % 2 == 1) and (bz % 2 == 1)   # big footprints every other tile (10 m spacing)
+			if anchor:
+				if downtown:
+					if r < 0.3: _prop_model("skyscraper_tall", p, [0.0, PI / 2].pick_random())
+					elif r < 0.6: _prop_model("skyscraper", p, [0.0, PI / 2].pick_random())
+					else: _prop_model("apartment_tall", p, yaw4)
+				elif midtown:
+					if r < 0.15: _prop_model("skyscraper", p, [0.0, PI / 2].pick_random())
+					elif r < 0.4: _prop_model("apartment_tall", p, yaw4)
+					elif r < 0.75: _prop_model("apartment", p, yaw4)
+					else: _prop_model("house", p, yaw4)
 				else:
-					# fill the gaps between buildings (the original packs ~3 small objects per 5 m tile)
-					var n := _rng.randi_range(2, 4)
-					for i in n:
-						var q := p + Vector3(_rng.randf_range(-2.0, 2.0), 0, _rng.randf_range(-2.0, 2.0))
-						var k := _rng.randf()
-						if k < 0.25: _prop_model("tree_small", q, _rng.randf() * TAU)
-						elif k < 0.4: _prop_box("hedge", q, Vector3(1.6, 0.9, 0.8), "leaf", 2, 2, 0, [0.0, PI / 2].pick_random())
-						elif k < 0.55: _prop_box("flower", q, Vector3(0.5, 0.5, 0.5), ["flower1", "flower2", "flower3"].pick_random(), 1, 1)
-						elif k < 0.7: _prop_box("crate", q, Vector3(0.8, 0.8, 0.8), "wood", 1, 1, 0, _rng.randf() * PI)
-						elif k < 0.8: _prop_box("dumpster", q, Vector3(1.8, 1.2, 1.0), "b_mint2", 2, 2, 0, [0.0, PI / 2].pick_random())
-						elif k < 0.9: _prop_model("bench", q, _rng.randf() * TAU)
-						else: _attach_mover(_prop_model("person", q, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
-			"side":
-				for k in (1 if _rng.randf() < 0.6 else 0):
-					var q := p + Vector3(_rng.randf_range(-2.2, 2.2), 0, _rng.randf_range(-2.2, 2.2))
-					match _rng.randi() % 4:
-						0: _prop_box("can", q, Vector3(0.3, 0.4, 0.3), ["cone", "b_coral", "b_sky"].pick_random(), 1, 1)
-						1: _prop_box("flower", q, Vector3(0.45, 0.45, 0.45), ["flower1", "flower2", "flower3"].pick_random(), 1, 1)
-						2: _prop_box("box", q, Vector3(0.6, 0.5, 0.6), "wood", 1, 1, 0, _rng.randf() * PI)
-						3: _prop_box("hydrant", q, Vector3(0.35, 0.7, 0.35), "b_coral", 1, 1)
-				if _rng.randf() < 0.5:
-					_prop_box("cone" if _rng.randf() < 0.5 else "bin", p + Vector3(_rng.randf_range(-1.8, 1.8), 0, _rng.randf_range(-1.8, 1.8)), Vector3(0.5, 0.7, 0.5) , ["cone", "bin"].pick_random(), 1, 1)
-				var r := _rng.randf()
-				if r < 0.28: _prop_model("lamp", p + Vector3(_rng.randf_range(-1.8, 1.8), 0, _rng.randf_range(-1.8, 1.8)))
-				elif r < 0.45: _prop_box("pole", p + Vector3(_rng.randf_range(-1.8, 1.8), 0, _rng.randf_range(-1.8, 1.8)), Vector3(0.2, 2.6, 0.2), "metal", 1, 1)
-				elif r < 0.58: _prop_model("bench", p, _rng.randf() * PI)
-				elif r < 0.68: _prop_box("bin", p + Vector3(_rng.randf_range(-1.5, 1.5), 0, _rng.randf_range(-1.5, 1.5)), Vector3(0.6, 0.9, 0.6), "bin", 1, 1)
-				elif r < 0.78: _prop_box("cone", p + Vector3(_rng.randf_range(-1.5, 1.5), 0, _rng.randf_range(-1.5, 1.5)), Vector3(0.5, 0.7, 0.5), "cone", 1, 1)
-				elif r < 0.9: _attach_mover(_prop_model("person", p + Vector3(_rng.randf_range(-1.8, 1.8), 0, _rng.randf_range(-1.8, 1.8)), _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
-				else: _prop_model("tree_small", p, _rng.randf() * TAU)
-			"park":
-				var r := _rng.randf()
-				if r < 0.35: _prop_box("flower", p + Vector3(_rng.randf_range(-2, 2), 0, _rng.randf_range(-2, 2)), Vector3(0.5, 0.5, 0.5), ["flower1", "flower2", "flower3"].pick_random(), 1, 1)
-				elif r < 0.6: _prop_model("tree" if _rng.randf() < 0.5 else "tree_small", p + Vector3(_rng.randf_range(-1.5, 1.5), 0, _rng.randf_range(-1.5, 1.5)), _rng.randf() * TAU)
-				elif r < 0.75: _prop_box("hedge", p, Vector3(2.4, 0.9, 0.8), "leaf", 2, 2, 0, _rng.randf() < 0.5 if 0.0 else PI / 2)
-				elif r < 0.85: _prop_model("bench", p, _rng.randf() * TAU)
-				elif r < 0.95: _attach_mover(_prop_model("person", p, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
-			"road":
-				if _rng.randf() < 0.06:
-					var yaw := 0.0 if key.x % block_tiles < 2 else PI / 2
-					if _rng.randf() < 0.5: yaw += PI
-					var car := _prop_model("taxi" if _rng.randf() < 0.4 else "car", p + Vector3(_rng.randf_range(-0.8, 0.8), 0, _rng.randf_range(-0.8, 0.8)), yaw)
-					_attach_mover(car, Movable.Kind.CAR, Vector3(0, 0, 1).rotated(Vector3.UP, yaw), _rng.randf_range(6.0, 10.0), PI / 2)
+					if r < 0.45: _prop_model("house", p, yaw4)
+					else: _prop_model("apartment", p, yaw4)
+			else:
+				for i in _rng.randi_range(2, 4):
+					var q: Vector3 = j.call(2.0)
+					var k := _rng.randf()
+					if k < 0.22: _prop_model("tree_small", q, _rng.randf() * TAU)
+					elif k < 0.4: _prop_model("bush", q, _rng.randf() * TAU)
+					elif k < 0.55: _prop_model("planter", q, _rng.randf() * TAU)
+					elif k < 0.7: _prop_model("cardbox", q, _rng.randf() * TAU)
+					elif k < 0.8: _prop_model("dumpster", q, yaw4)
+					elif k < 0.9: _prop_model("bench", q, _rng.randf() * TAU)
+					else: _attach_mover(_prop_model("person", q, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+		"side":
+			if _rng.randf() < 0.7:
+				_prop_model(["cone", "hydrant", "mailbox", "cardbox", "planter"].pick_random(), j.call(2.2), _rng.randf() * TAU)
+			var r := _rng.randf()
+			if r < 0.28: _prop_model("lamp", j.call(1.8))
+			elif r < 0.42: _prop_model("bench", p, _rng.randf() * PI)
+			elif r < 0.58: _prop_model("bin", j.call(1.5), _rng.randf() * TAU)
+			elif r < 0.7: _prop_model("cone", j.call(1.5), _rng.randf() * TAU)
+			elif r < 0.85: _attach_mover(_prop_model("person", j.call(1.8), _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+			else: _prop_model("tree_small", p, _rng.randf() * TAU)
+		"park":
+			var r := _rng.randf()
+			if r < 0.3: _prop_model("planter", j.call(2.0), _rng.randf() * TAU)
+			elif r < 0.55: _prop_model("tree" if _rng.randf() < 0.5 else "tree_small", j.call(1.5), _rng.randf() * TAU)
+			elif r < 0.72: _prop_model("bush", j.call(1.8), _rng.randf() * TAU)
+			elif r < 0.85: _prop_model("bench", p, _rng.randf() * TAU)
+			elif r < 0.95: _attach_mover(_prop_model("person", p, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+		"road":
+			if _rng.randf() < 0.06:
+				var yaw := 0.0 if key.x % block_tiles < 2 else PI / 2
+				if _rng.randf() < 0.5: yaw += PI
+				var car := _prop_model("taxi" if _rng.randf() < 0.4 else "car", j.call(0.8), yaw)
+				_attach_mover(car, Movable.Kind.CAR, Vector3(0, 0, 1).rotated(Vector3.UP, yaw), _rng.randf_range(6.0, 10.0), PI / 2)
 
 var match_ref = null
 var mover_count := 0
@@ -409,7 +397,7 @@ func _place_landmarks() -> void:
 
 func _make_spawn_groups() -> void:
 	spawn_groups.clear()
-	var w := bounds.size.x; var d := bounds.size.y
+	var w := zone_rect(0).size.x; var d := zone_rect(0).size.y
 	var centers := [Vector2(-0.35, -0.35), Vector2(0.35, -0.35), Vector2(-0.35, 0.35), Vector2(0.35, 0.35), Vector2(0.0, 0.0)]
 	for c in centers:
 		var g: Array = []

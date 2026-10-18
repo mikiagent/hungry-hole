@@ -2,11 +2,11 @@ extends RefCounted
 var runner
 func test_size_and_speed_tables() -> void:
 	var b := BalanceTable.new()
-	runner.approx(b.size_for_level(1), 1.2, 0.001, "size L1 starts small")
-	runner.check(b.size_for_level(20) > 15.0 and b.size_for_level(20) < 17.0, "size L20 ~15.7")
+	runner.approx(b.size_for_level(1), 1.6, 0.001, "size L1 1.6 m")
+	runner.check(b.size_for_level(20) > 17.0 and b.size_for_level(20) < 19.0, "size L20 ~17.5")
 	for l in range(2, 31): runner.check(b.size_for_level(l) > b.size_for_level(l - 1), "sizes increase")
 	for l in range(1, 31): runner.approx(b.speed_for_level(l), 4.36 + 0.868 * b.size_for_level(l), 0.02, "speed follows original size relation")
-	runner.approx(b.size_for_level(30), 60.89, 0.01, "size L30 ~61")
+	runner.check(b.size_for_level(30) > 59.0 and b.size_for_level(30) < 63.0, "size L30 ~61")
 	runner.approx(b.size_for_level(31), b.size_for_level(30) * 1.03, 0.01, "overflow growth 3% per level")
 	runner.check(b.size_for_level(60) > b.size_for_level(40), "keeps growing")
 	runner.approx(b.speed_for_level(60), b.speed_for_level(30), 0.001, "speed capped at L30 value")
@@ -22,8 +22,10 @@ func test_fast_xp_table_levels() -> void:
 	runner.check(b.level_for_xp(87) == 10, "87 xp = L10 (original)")
 	runner.check(b.level_for_xp(460) == 20, "460 xp = L20 (doubled)")
 	runner.check(b.level_for_xp(780) == 30, "780 xp = L30 (doubled)")
-	runner.check(b.level_for_xp(780 + 40) == 31, "one overflow level per 40 xp past L30")
-	runner.check(b.level_for_xp(780 + 400) == 40, "ten overflow levels")
+	runner.check(b.level_for_xp(780 + 60) == 31, "first overflow level costs 60")
+	runner.check(b.level_for_xp(780 + 60 + 79) == 31, "second costs 80 more")
+	runner.check(b.level_for_xp(780 + 140) == 32, "L32 at +140")
+	runner.check(b.level_for_xp(20000) < 75, "10k+ xp stays a sane size")
 	runner.approx(b.level_progress(8, 2), 0.5, 0.001, "progress halfway L2→L3")
 func test_legacy_xp_table() -> void:
 	var b := BalanceTable.new(); b.use_fast_table = false

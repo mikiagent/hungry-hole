@@ -14,6 +14,11 @@ var _joystick: Control
 var _joy_active := false; var _joy_origin := Vector2.ZERO; var _joy_cur := Vector2.ZERO
 var _camera: Camera3D
 var _killer_name := ""
+var _lives_label: Label
+var _goal_label: Label
+var _respawn_label: Label
+var _respawn_at := 0.0
+var _winner: Hole
 var _tip_label: Label
 var _pause_panel: PanelContainer
 var _confetti: CPUParticles2D
@@ -29,7 +34,10 @@ func setup(m: Match, cam: Camera3D) -> void:
 	Events.object_captured.connect(_on_captured)
 	Events.kill_streak.connect(_on_kill_streak)
 	Events.match_ended.connect(_on_match_ended)
-	Events.player_eaten.connect(func(k): _killer_name = k.display_name if k else "")
+	Events.player_eaten.connect(func(k):
+		_killer_name = k.display_name if k else ""
+		if player.lives > 0: _respawn_at = Time.get_ticks_msec() / 1000.0 + match_ref.params.respawn_cooldown)
+	Events.lives_changed.connect(func(_h, _l): _refresh_lives())
 	player.level_changed.connect(_on_level)
 	_on_level(player.level)
 
@@ -60,6 +68,10 @@ func _build() -> void:
 	var bg := StyleBoxFlat.new(); bg.bg_color = Color(0.17, 0.18, 0.28, 0.7); bg.set_corner_radius_all(13)
 	var fg := StyleBoxFlat.new(); fg.bg_color = Color("6BCB77"); fg.set_corner_radius_all(13)
 	_xp_bar.add_theme_stylebox_override("background", bg); _xp_bar.add_theme_stylebox_override("fill", fg); sp.add_child(_xp_bar)
+	_lives_label = Label.new(); _style_label(_lives_label, 40, Color("FF5252")); sp.add_child(_lives_label)
+	_goal_label = Label.new(); _style_label(_goal_label, 28, Color("FFF8E7")); sp.add_child(_goal_label)
+	_respawn_label = Label.new(); _respawn_label.set_anchors_preset(Control.PRESET_CENTER); _respawn_label.position = Vector2(0, 760); _respawn_label.size = Vector2(1080, 140)
+	_respawn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(_respawn_label, 80, Color("FFD93D")); _respawn_label.visible = false; root.add_child(_respawn_label)
 	# kill text
 	_kill_label = Label.new(); _kill_label.set_anchors_preset(Control.PRESET_CENTER_TOP); _kill_label.position = Vector2(0, 420); _kill_label.size = Vector2(1080, 120)
 	_kill_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(_kill_label, 96, Color("FF5252")); _kill_label.modulate.a = 0.0; root.add_child(_kill_label)
@@ -97,6 +109,12 @@ func show_center(text: String) -> void:
 	_center_label.visible = text != ""
 	if _tip_label: _tip_label.visible = text != ""
 
+func toast(text: String) -> void:
+	var l := Label.new(); l.text = text; l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.position = Vector2(0, 330); l.size = Vector2(1080, 100); _style_label(l, 60, Color("6BCB77"))
+	add_child(l)
+	var tw := l.create_tween(); tw.tween_property(l, "modulate:a", 1.0, 0.2).from(0.0); tw.tween_interval(2.0); tw.tween_property(l, "modulate:a", 0.0, 0.5); tw.tween_callback(l.queue_free)
+
 func set_paused(on: bool) -> void:
 	get_tree().paused = on
 	_pause_panel.visible = on
@@ -120,8 +138,16 @@ func _on_time(t: float) -> void:
 func _on_level(level: int) -> void:
 	_size_label.text = tr("TXT_GAME_LEVEL") % level
 
+func _refresh_lives() -> void:
+	if _lives_label: _lives_label.text = "♥".repeat(maxi(player.lives, 0)) + "♡".repeat(maxi(match_ref.params.lives - player.lives, 0))
+
 func _process(_d: float) -> void:
 	if player: _xp_bar.value = player.balance.level_progress(player.xp, player.level)
+	if _lives_label and _lives_label.text == "": _refresh_lives()
+	if _goal_label: _goal_label.text = "%.0f / %d m" % [player.size, int(match_ref.params.win_diameter)]
+	var left := _respawn_at - Time.get_ticks_msec() / 1000.0
+	_respawn_label.visible = player.is_dead and player.lives > 0 and left > 0.0
+	if _respawn_label.visible: _respawn_label.text = tr("TXT_RESPAWN_IN") % int(ceil(left))
 	_joystick.queue_redraw()
 
 func _on_ranking(holes: Array) -> void:
@@ -159,7 +185,7 @@ func on_joystick(active: bool, origin: Vector2, cur: Vector2) -> void:
 	_joy_active = active; _joy_origin = origin; _joy_cur = cur
 
 func _on_match_ended(result: int, ranking: Array) -> void:
-	var title: String = tr({Match.Result.SUCCESS: "TXT_GAME_OVER_VICTORY", Match.Result.TIMEOUT: "TXT_GAME_OVER_TIME_OUT", Match.Result.EATEN: "TXT_GAME_OVER_EATEN"}.get(result, "TXT_GAME_OVER_TIME_OUT"))
+	var title: String = tr({Match.Result.SUCCESS: "TXT_GAME_OVER_VICTORY", Match.Result.TIMEOUT: "TXT_GAME_OVER_TIME_OUT", Match.Result.EATEN: "TXT_GAME_OVER_EATEN", Match.Result.RIVAL_WON: "TXT_GAME_OVER_RIVAL"}.get(result, "TXT_GAME_OVER_TIME_OUT"))
 	for c in _gameover.get_children(): c.queue_free()
 	var v := VBoxContainer.new(); v.set_anchors_preset(Control.PRESET_FULL_RECT); v.add_theme_constant_override("separation", 14); _gameover.add_child(v)
 	var t := Label.new(); t.text = title; t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(t, 96, Color("FF9A01") if result != Match.Result.EATEN else Color("FF5252")); v.add_child(t)

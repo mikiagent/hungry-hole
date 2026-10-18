@@ -136,7 +136,7 @@ func _closest_vulnerable_hole() -> Hole:
 	for b in match_ref.bots:
 		if b != self and is_instance_valid(b.target) and b.target is Hole and not (b.target as Hole).is_bot: hunters += 1
 	for h in match_ref.holes:
-		if h == hole or h.is_dead or h.level >= hole.level: continue
+		if h == hole or h.is_dead or h.level >= hole.level or h.is_protected(): continue
 		if not h.is_bot and hunters >= profile.max_player_hunters: continue
 		var d: float = hole.global_position.distance_to(h.global_position)
 		if d < bd: bd = d; best = h

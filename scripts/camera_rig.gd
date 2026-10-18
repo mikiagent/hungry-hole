@@ -10,6 +10,9 @@ var _fov := 60.0
 @onready var cam: Camera3D = $Camera3D
 
 func _ready() -> void:
+	# the rig follows the hole's interpolated transform itself every frame, so it must not be physics-interpolated
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	if curves == null: curves = CameraCurves.new()
 	yaw_deg = curves.map_rotation_deg + [0.0, 90.0, 180.0, 270.0].pick_random()
 

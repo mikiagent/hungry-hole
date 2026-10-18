@@ -1,7 +1,7 @@
 class_name Match
 extends Node
 ## Timer-mode match: spawns holes, runs the clock, ranking, kills, end of game.
-enum Result { UNDEFINED = -1, SUCCESS = 0, TIMEOUT = 1, EATEN = 2 }
+enum Result { UNDEFINED = -1, SUCCESS = 0, TIMEOUT = 1, EATEN = 2, RIVAL_WON = 3 }
 @export var params: GameModeParams
 @export var balance: BalanceTable
 var holes: Array[Hole] = []
@@ -47,6 +47,7 @@ func spawn_holes(spawn_groups: Array) -> void:
 func _make_hole(id: int, is_bot: bool, nm: String, col: Color, group: Array) -> Hole:
 	var h := hole_scene.instantiate() as Hole
 	h.player_id = id; h.is_bot = is_bot; h.display_name = nm; h.color = col; h.balance = balance
+	h.lives = params.lives
 	map.add_child(h)
 	var p: Vector3 = group[randi() % group.size()]
 	h.global_position = Vector3(p.x, 0, p.z)
@@ -78,7 +79,9 @@ func _process(delta: float) -> void:
 		end(Result.TIMEOUT)
 
 func _physics_process(_delta: float) -> void:
-	if playing: _check_hole_kills()
+	if playing:
+		_check_hole_kills()
+		_check_win_size()
 
 func _update_ranking() -> void:
 	var alive := holes.duplicate()
@@ -92,7 +95,7 @@ func _check_hole_kills() -> void:
 	for a in holes:
 		if a.is_dead: continue
 		for b in holes:
-			if a == b or b.is_dead or b.level >= a.level: continue
+			if a == b or b.is_dead or b.level >= a.level or b.is_protected() or a.is_protected(): continue
 			var d := a.global_position.distance_to(b.global_position)
 			# swallowed once more than half of the smaller hole is inside the bigger one
 			if d + b.radius() * 0.5 < a.radius():
@@ -100,6 +103,7 @@ func _check_hole_kills() -> void:
 
 func process_kill(killer: Hole, victim: Hole) -> void:
 	var now := Time.get_ticks_msec() / 1000.0
+	victim.lives -= 1          # before die(): the died signal handlers read the remaining lives
 	victim.die(killer)
 	var reward := maxi(victim.points / 4, victim.level * 2)  # BotSizeToPoints is remote-only; inferred reward
 	killer.add_points(reward); killer.add_xp(victim.level * 3)
@@ -111,25 +115,45 @@ func process_kill(killer: Hole, victim: Hole) -> void:
 	if not killer.is_bot:
 		Events.kill_streak.emit(killer, _streak)
 	AudioManager.play("kill")
-	if victim.is_bot and params.bots_respawn:
-		get_tree().create_timer(3.0).timeout.connect(func(): _respawn_bot(victim))
+	Events.lives_changed.emit(victim, victim.lives)
+	if victim.lives > 0:
+		get_tree().create_timer(params.respawn_cooldown).timeout.connect(func(): _respawn(victim))
+	_check_last_standing()
 
-func _respawn_bot(h: Hole) -> void:
+## Respawn at the spot (of 24 random candidates) farthest from any hole that could eat this one.
+func _respawn(h: Hole) -> void:
 	if not playing or not is_instance_valid(h): return
-	var best := Vector3.ZERO; var bd := -1.0
-	for i in 20:
-		var p := Vector3(randf_range(map_bounds.position.x + 5, map_bounds.end.x - 5), 0, randf_range(map_bounds.position.y + 5, map_bounds.end.y - 5))
-		var d := p.distance_to(player.global_position)
-		if d > bd: bd = d; best = p
-		if d >= params.bot_respawn_min_distance: break
-	h.respawn(best)
+	var best := Vector3.ZERO; var best_score := -INF
+	for i in 24:
+		var p := Vector3(randf_range(map_bounds.position.x + 8, map_bounds.end.x - 8), 0, randf_range(map_bounds.position.y + 8, map_bounds.end.y - 8))
+		var nearest := INF
+		for o in holes:
+			if o == h or o.is_dead or o.level <= h.level: continue
+			nearest = minf(nearest, p.distance_to(o.global_position) - o.radius())
+		if nearest > best_score: best_score = nearest; best = p
+	h.respawn(best, params.spawn_protection)
+
+func _check_last_standing() -> void:
+	if not player.is_dead or player.lives > 0:
+		var rivals_left := 0
+		for h in holes:
+			if h != player and (not h.is_dead or h.lives > 0): rivals_left += 1
+		if rivals_left == 0 and holes.size() > 1:
+			end(Result.SUCCESS)
+
+func _check_win_size() -> void:
+	for h in holes:
+		if not h.is_dead and h.size >= params.win_diameter:
+			end(Result.SUCCESS if h == player else Result.RIVAL_WON)
+			return
 
 func _on_bot_died(_killer, _h) -> void:
 	pass
 
 func _on_player_died(killer) -> void:
 	Events.player_eaten.emit(killer)
-	end(Result.EATEN)
+	if player.lives <= 0:
+		end(Result.EATEN)
 
 func end(r: int) -> void:
 	if not playing: return

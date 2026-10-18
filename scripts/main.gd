@@ -37,6 +37,10 @@ func _ready() -> void:
 	match_node = Match.new(); match_node.params = GameModeParams.new(); match_node.balance = BalanceTable.new(); add_child(match_node)
 	match_node.setup(city, city.bounds)
 	Movable.current_match = match_node
+	city.zone_unlocked.connect(func(i, r):
+		match_node.map_bounds = r
+		hud.toast(tr("TXT_ZONE_UNLOCKED") % (i + 1))
+		print("[main] zone %d unlocked, bounds %s, objects %d" % [i, r, city.object_count]))
 	match_node.spawn_holes(city.spawn_groups)
 	rig = CameraRig.new(); var cam := Camera3D.new(); cam.name = "Camera3D"; rig.add_child(cam); add_child(rig)
 	rig.target = match_node.player; rig.snap()
@@ -45,7 +49,9 @@ func _ready() -> void:
 	controller.joystick_changed.connect(hud.on_joystick)
 	controller.enabled = false
 	hud.show_center(tr("TXT_TAP_TO_START"))
-	Events.match_ended.connect(func(_r, _rank): state = State.ENDED)
+	Events.match_ended.connect(func(r, _rank):
+		state = State.ENDED
+		print("[main] match ended: result=%d at %.0f s left, player L%d lives=%d size=%.1f" % [r, match_node.time_left, match_node.player.level, match_node.player.lives, match_node.player.size]))
 	print("[main] city objects=%d points=%d holes=%d yaw=%.0f" % [city.object_count, city.total_points, match_node.holes.size(), rig.yaw_deg])
 	if _autoplay:
 		var bc := BotController.new(); add_child(bc); bc.setup(match_node.player, match_node, BotProfile.hard())
@@ -68,9 +74,7 @@ func _ready() -> void:
 		var site := p.global_position + Vector3(16, 0, 0)
 		for c in city.get_children():
 			if c is FallingObject and c.global_position.distance_to(site) < 16.0: c.free()
-		city._building_stack(site + Vector3(0, 0, 1.6), 4, "b_coral")
-		for c in city.get_children():
-			if c is FallingObject and c.global_position.distance_to(site + Vector3(0, 1.5, 1.6)) < 0.5: _topple_base = c
+		_topple_base = city._prop_model("apartment_tall", site + Vector3(0, 0, 3.2), 0.0)
 		rig.snap()
 	if _edge_test:
 		# parked size-10 hole (radius 5); crates at increasing distance from its centre along +X
@@ -142,7 +146,7 @@ func _physics_process(delta: float) -> void:
 		var p := match_node.player
 		p.desired_dir = Vector3(1, 0, 0); p.input_mag = 0.35 if _topple_t < 6.0 else 0.0
 		for c in city.get_children():
-			if c is FallingObject and c.name.begins_with("apt") and not c.freeze and is_instance_valid(c):
+			if is_instance_valid(c) and c is FallingObject and c.name.begins_with("apartment") and not c.freeze:
 				var tilt := rad_to_deg(acos(clampf(c.global_transform.basis.y.dot(Vector3.UP), -1.0, 1.0)))
 				_topple_max = maxf(_topple_max, tilt)
 		if _topple_t > 7.0 and _topple_t < 100.0:

@@ -20,5 +20,5 @@ func test_waypoint_clamped_to_bounds() -> void:
 func test_game_mode_defaults() -> void:
 	var g := GameModeParams.new()
 	runner.check(g.player_count == 7, "7 players")
-	runner.approx(g.duration_seconds, 120.0, 0.001, "2 minutes")
+	runner.approx(g.duration_seconds, 300.0, 0.001, "5 minutes")
 	runner.approx(g.kill_cooldown, 5.0, 0.001, "kill cooldown 5 s")

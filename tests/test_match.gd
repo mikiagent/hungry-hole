@@ -57,3 +57,36 @@ func test_ranking_orders_by_points() -> void:
 	m._update_ranking()
 	runner.check(b.rank == 1 and c.rank == 2 and a.rank == 3, "rank by points desc")
 	m.map.queue_free(); m.queue_free()
+
+func test_lives_and_respawn_keep_size() -> void:
+	var m := _make_match(); m.playing = true
+	var big := _add_hole(m, 0, 8, Vector3.ZERO, false); m.player = big; big.lives = 3
+	var small := _add_hole(m, 1, 4, Vector3(big.radius() * 0.2, 0, 0)); small.lives = 3
+	m._check_hole_kills()
+	runner.check(small.is_dead and small.lives == 2, "eaten hole loses one life")
+	runner.check(m.playing, "match continues while lives remain")
+	m._respawn(small)
+	runner.check(not small.is_dead and small.level == 4, "respawns at the level it died")
+	runner.check(small.is_protected(), "spawn protection active")
+	small.global_position = big.global_position
+	m._check_hole_kills()
+	runner.check(not small.is_dead, "protected hole can't be eaten right away")
+	m.map.queue_free(); m.queue_free()
+
+func test_player_out_of_lives_ends_match() -> void:
+	var m := _make_match(); m.playing = true
+	var big := _add_hole(m, 1, 8, Vector3.ZERO); big.lives = 3
+	var me := _add_hole(m, 0, 2, Vector3(big.radius() * 0.2, 0, 0), false); m.player = me; me.lives = 1
+	me.died.connect(m._on_player_died)
+	m._check_hole_kills()
+	runner.check(not m.playing and m.result == Match.Result.EATEN, "last life lost ends the match as EATEN")
+	m.map.queue_free(); m.queue_free()
+
+func test_win_size() -> void:
+	var m := _make_match(); m.playing = true
+	var me := _add_hole(m, 0, 1, Vector3.ZERO, false); m.player = me
+	var bot := _add_hole(m, 1, 1, Vector3(60, 0, 0))
+	bot.size = m.params.win_diameter + 1.0
+	m._check_win_size()
+	runner.check(not m.playing and m.result == Match.Result.RIVAL_WON, "a bot reaching the goal size beats you")
+	m.map.queue_free(); m.queue_free()
