@@ -16,9 +16,16 @@ var _kill_test := false
 var _diag := false
 var _edge_test := false
 var _topple_test := false
+var _unlock_test := false
+var _trace := false
+var _god := false   # --god: the player can't be eaten (pacing tests run the full match)
+var _trace_t := 0.0
 var _topple_base: FallingObject
 var _topple_max := 0.0
 var _topple_t := 0.0
+var _topple_tall: FallingObject
+var _topple_sample := 0.0
+var _topple_stats := {}
 var _edge_boxes: Array = []
 var _edge_t := 0.0
 var _diag_stuck := {}
@@ -65,6 +72,10 @@ func _ready() -> void:
 		for bc in match_node.bots: bc.set_physics_process(false)
 		match_node.set_process(false)
 		rig.snap()
+	if _unlock_test:
+		get_tree().create_timer(2.0).timeout.connect(func():
+			print("[unlock-test] before: zone %d objects %d bounds %s" % [city.zone_index, city.object_count, city.bounds])
+			city._unlock_next_zone())
 	if _topple_test:
 		# a level-12 hole (5.2 m) drives past a 4-storey stack (4x4 m footprint needs a 5.8 m hole), 1.6 m off-centre
 		var p := match_node.player; p.set_level(12, true)
@@ -73,8 +84,10 @@ func _ready() -> void:
 		if controller: controller.queue_free(); controller = null
 		var site := p.global_position + Vector3(16, 0, 0)
 		for c in city.get_children():
-			if c is FallingObject and c.global_position.distance_to(site) < 16.0: c.free()
+			if c is FallingObject and c.global_position.distance_to(site) < 45.0: c.free()
 		_topple_base = city._prop_model("apartment_tall", site + Vector3(0, 0, 3.2), 0.0)
+		# a skyscraper further along the same line, clipped on the other side, to check tall objects land on solid ground
+		_topple_tall = city._prop_model("skyscraper", site + Vector3(22, 0, -4.5), 0.0)
 		rig.snap()
 	if _edge_test:
 		# parked size-10 hole (radius 5); crates at increasing distance from its centre along +X
@@ -112,6 +125,9 @@ func _parse_args() -> void:
 		if a == "--diag-eat": _diag = true
 		if a == "--edge-test": _edge_test = true
 		if a == "--topple-test": _topple_test = true
+		if a == "--unlock-test": _unlock_test = true
+		if a == "--trace": _trace = true
+		if a == "--god": _god = true
 		if a.begins_with("--screenshot-at="): _screenshot_at = float(a.substr(16))
 
 func _build_world() -> void:
@@ -149,10 +165,27 @@ func _physics_process(delta: float) -> void:
 			if is_instance_valid(c) and c is FallingObject and c.name.begins_with("apartment") and not c.freeze:
 				var tilt := rad_to_deg(acos(clampf(c.global_transform.basis.y.dot(Vector3.UP), -1.0, 1.0)))
 				_topple_max = maxf(_topple_max, tilt)
-		if _topple_t > 7.0 and _topple_t < 100.0:
+		p.input_mag = 0.35 if _topple_t < 12.0 else 0.0
+		# per-tick stats for both test buildings: upward speed after first contact (bounce), deepest point (clipping)
+		for fo in [_topple_base, _topple_tall]:
+			if not is_instance_valid(fo) or fo.captured_by != null: continue
+			var s: Dictionary = _topple_stats.get(fo.name, {"max_up": 0.0, "min_low": INF, "max_tilt": 0.0})
+			if fo.tipping_for != null or not fo.freeze:
+				s.max_up = maxf(s.max_up, fo.linear_velocity.y)
+				s.min_low = minf(s.min_low, fo.lowest_point())
+				s.max_tilt = maxf(s.max_tilt, rad_to_deg(fo.tilt()))
+			_topple_stats[fo.name] = s
+		_topple_sample += delta
+		if _topple_sample > 0.5 and _topple_t < 100.0:
+			_topple_sample = 0.0
+			for fo in [_topple_base, _topple_tall]:
+				if is_instance_valid(fo):
+					print("[topple-test] t=%.1f %s y=%.2f tilt=%.0f low=%.2f vy=%.2f frozen=%s tipping=%s proc=%s sleep=%s" % [_topple_t, fo.name, fo.global_position.y, rad_to_deg(fo.tilt()), fo.lowest_point(), fo.linear_velocity.y, fo.freeze, fo.tipping_for != null, fo.is_physics_processing(), fo.sleeping])
+		if _topple_t > 16.0 and _topple_t < 100.0:
 			_topple_t = 100.0
 			var eaten := not is_instance_valid(_topple_base) or _topple_base.captured_by != null
 			print("[topple-test] stack max tilt %.0f deg, eaten=%s, base y=%.2f" % [_topple_max, eaten, _topple_base.global_position.y if not eaten else -99.0])
+			for k in _topple_stats: print("[topple-test] %s stats %s" % [k, _topple_stats[k]])
 	if _edge_test and state == State.PLAYING:
 		_edge_t += delta
 		if _edge_t > 4.0 and _edge_t < 100.0:
@@ -195,10 +228,25 @@ func _diag_tick(delta: float) -> void:
 		elif now - _diag_stuck[o] > 0.5 and _diag_stuck[o] > 0.0:
 			_diag_reported += 1
 			if _diag_reported <= 12:
-				print("[diag] STUCK %s size=%d y=%.2f freeze=%s mask=%d sleeping=%s" % [o.name, o.size_required, o.global_position.y, o.freeze, o.collision_mask, o.sleeping])
+				print("[diag] STUCK %s size=%d y=%.2f freeze=%s mask=%d sleeping=%s cooldown=%.1f spits=%d tipping=%s proc=%s layer=%d" % [o.name, o.size_required, o.global_position.y, o.freeze, o.collision_mask, o.sleeping, o.no_eat_until - now, o.spit_count, o.tipping_for != null, o.is_physics_processing(), o.collision_layer])
 			_diag_stuck[o] = -1.0
 
 func _process(delta: float) -> void:
+	if _god and state == State.PLAYING: match_node.player.protected_until = INF
+	if _trace and state == State.PLAYING:
+		_trace_t += delta
+		if _trace_t > 5.0:
+			_trace_t = 0.0
+			var parts := []
+			for h in match_node.holes:
+				var tgt := "-"
+				for b in match_node.bots:
+					if b.hole == h:
+						if not is_instance_valid(b.target): tgt = "wp" if b._has_waypoint else "none"
+						elif b.target is FallingObject: tgt = "obj"
+						elif b.target is Hole: tgt = "hole"
+				parts.append("%s L%d xp=%d %s lives=%d %s" % [h.display_name, h.level, h.xp, h.xp_log, h.lives, tgt])
+			print("[trace] t=%.0f fps=%d eatables=%d | %s" % [match_node.params.duration_seconds - match_node.time_left, Engine.get_frames_per_second(), match_node.eatables_snapshot().size(), " ; ".join(parts)])
 	if _diag and state == State.PLAYING: _diag_tick(delta)
 	city.update_hole_uniforms(match_node.holes)
 	for h in match_node.holes: h.update_occluders(match_node.holes)

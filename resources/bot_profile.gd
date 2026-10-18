@@ -4,7 +4,7 @@ extends Resource
 @export var profile_name: String = "Normal"
 @export var starting_size: int = 1
 @export var max_size: int = -1
-@export var max_target_distance: float = 250.0
+@export var max_target_distance: float = 60.0   # original 250 was tuned for its smaller map; 60 keeps small holes efficient here
 @export var select_closest_chance: float = 0.5
 @export var select_furthest_chance: float = 0.5
 @export var select_random_chance: float = 0.0

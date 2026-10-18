@@ -20,6 +20,8 @@ var no_eat_until := 0.0
 var footprint_half := 0.5   # half the largest horizontal extent, set by the generator
 var tipping_for = null   # hole whose opening undercuts us while we are too big to be eaten
 var _flash_tween: Tween
+var _settle_t := 0.0
+static var _phys_mat: PhysicsMaterial
 var _original_colors := {}
 
 func _ready() -> void:
@@ -35,27 +37,31 @@ func _ready() -> void:
 	set_physics_process(false)   # idle objects cost nothing per tick; enabled while falling or tipping
 	can_sleep = true
 	continuous_cd = false
+	if _phys_mat == null:
+		_phys_mat = PhysicsMaterial.new(); _phys_mat.bounce = 0.0; _phys_mat.friction = 0.9; _phys_mat.absorbent = true
+	physics_material_override = _phys_mat
 
 ## Captured once the whole object is this far below the ground (deeper than the original's 1-5 u so the fall reads clearly).
 const CAPTURE_EXTRA_DEPTH := 4.0
 
 func _physics_process(_delta: float) -> void:
-	# safety net: anything not being eaten that ends up well below ground goes back on top
-	if captured_by == null and not is_falling and not freeze and global_position.y < -3.0:
+	# safety net: anything not being eaten that sank into the ground is lifted just enough to sit on it
+	if captured_by == null and not is_falling and not freeze and tipping_for == null and lowest_point() < -0.3:
 		_restore_ground()
-		global_position.y = height * 0.5 + 0.5
 	if tipping_for != null and (not is_instance_valid(tipping_for) or tipping_for.is_dead):
 		_restore_ground()
 	elif tipping_for != null:
 		_undercut_torque()
+	elif captured_by == null and not is_falling and not freeze:
+		_settle(_delta)
 	if is_falling and captured_by == null and falling_for != null and is_instance_valid(falling_for):
 		if global_position.y < -(height * 0.5 + CAPTURE_EXTRA_DEPTH + falling_for.radius() * 0.25):
 			capture(falling_for)
 
-## Too big for this hole: become a real rigid body that loses ground support over the opening.
-## It tips and can topple over the edge, but the hole's plug stops it from sinking through.
-## The part of the footprint over the opening has lost its foundation: tip toward the hole in proportion
-## to how much of the footprint is unsupported, so a clipped building leans and can fall over.
+## Too big for this hole: become a real rigid body standing on the real ground. The part of its footprint over
+## the opening has lost its foundation, modelled as a torque toward the clipped corner. It pivots on its
+## hole-side edge and falls over onto the ground; it never sinks into the opening (it does not fit).
+## The torque beats the righting moment (weight x half-width) plus a share that grows with the undercut.
 const UNDERCUT_MIN := 0.12
 const UNDERCUT_STRENGTH := 0.9
 func _undercut_torque() -> void:
@@ -65,7 +71,12 @@ func _undercut_torque() -> void:
 	var d := to.length()
 	if d < 0.01: return
 	var undercut := clampf((h.radius() - (d - footprint_half)) / (2.0 * footprint_half), 0.0, 1.0)
-	if undercut < UNDERCUT_MIN: return
+	if undercut <= 0.0 and lowest_point() > -0.05:
+		_restore_ground()   # nothing over the opening any more: the rim and the ground are the same height, swap seamlessly
+		return
+	# stop pushing once the centre of mass is past the pivot edge: gravity finishes the fall, so it lands without slamming
+	var past_pivot := atan2(footprint_half / 0.9, maxf(height, 1.0) * 0.5) + 0.15
+	if undercut < UNDERCUT_MIN or tilt() > minf(past_pivot, TOPPLED_TILT): return
 	# tip toward the footprint corner that is over the opening (the clipped corner), not toward the hole's centre
 	var b := global_transform.basis
 	var ex := Vector3(b.x.x, 0, b.x.z).normalized() * footprint_half
@@ -76,26 +87,81 @@ func _undercut_torque() -> void:
 		if cd < best_d: best_d = cd; best = c
 	var dir: Vector3 = best.normalized() if best_d < h.radius() else to / d
 	var axis := Vector3.UP.cross(dir)
-	# gravity (80) acting on the unsupported share of the mass, lever arm ~ half the height
-	apply_torque(axis * mass * 80.0 * undercut * maxf(height, 1.0) * 0.5 * UNDERCUT_STRENGTH)
+	var g := 80.0
+	apply_torque(axis * mass * g * (footprint_half * 1.15 + undercut * maxf(height, 1.0) * 0.5 * UNDERCUT_STRENGTH))
 	sleeping = false
 
-## Give a tipped object its ground back; if it sank into the opening, lift it to ground level first.
+const TOPPLED_TILT := 1.15   # ~65°: past this it is falling over by itself, stop pushing
+
+## Angle between the object's up axis and world up.
+func tilt() -> float:
+	return global_transform.basis.y.normalized().angle_to(Vector3.UP)
+
+## Lowest world-space point of the collision box (works for any orientation, standing or lying).
+func lowest_point() -> float:
+	var low := INF
+	for c in get_children():
+		var cs := c as CollisionShape3D
+		if cs == null or not cs.shape is BoxShape3D: continue
+		var e: Vector3 = (cs.shape as BoxShape3D).size * 0.5
+		var xf := cs.global_transform
+		for sx in [-1.0, 1.0]:
+			for sy in [-1.0, 1.0]:
+				for sz in [-1.0, 1.0]:
+					low = minf(low, (xf * Vector3(e.x * sx, e.y * sy, e.z * sz)).y)
+	return low if low < INF else global_position.y - height * 0.5
+
+## Give a tipped object its ground back. If part of it sank into the opening, lift it only by that depth
+## (never teleport to standing height: a toppled building lying on its side would be launched into the air).
 func _restore_ground() -> void:
 	tipping_for = null
-	set_physics_process(false)
-	if global_position.y < height * 0.5 - 0.2:
-		global_position.y = height * 0.5 + 0.05
-		linear_velocity.y = maxf(linear_velocity.y, 0.0)
+	var low := lowest_point()
+	if low < -0.02:
+		global_position.y -= low - 0.02
+		linear_velocity = Vector3(linear_velocity.x, 0.0, linear_velocity.z) * 0.5
+		angular_velocity *= 0.5
 	collision_mask = 1 << 0 | 1 << 1 | 1 << 2
+	_settle_t = 0.0
+	set_physics_process(not freeze)   # keep watching until it comes to rest, then freeze in place
 
-func start_tipping(hole) -> void:
-	if captured_by != null or is_falling: return
-	tipping_for = hole
+## Become dynamic and report contacts, so a falling building knocks frozen neighbours loose (dominoes)
+## instead of grinding against them as if they were immovable walls.
+func _wake() -> void:
 	set_physics_process(true)
 	freeze = false
 	sleeping = false
-	collision_mask = 1 << 1 | 1 << 2 | hole.rim_layer_bit | hole.plug_layer_bit
+	_settle_t = 0.0
+	contact_monitor = true
+	max_contacts_reported = 4
+	if not body_entered.is_connected(_on_body_hit):
+		body_entered.connect(_on_body_hit)
+
+func _on_body_hit(body: Node) -> void:
+	var o := body as FallingObject
+	if o == null or not o.freeze or o.captured_by != null or o.is_falling: return
+	if linear_velocity.length() + angular_velocity.length() * height * 0.5 < 1.5: return   # only a real hit knocks things loose
+	o._wake()
+
+## Freeze an object once it has been at rest for a moment: no jitter, no per-tick cost.
+func _settle(delta: float) -> void:
+	if linear_velocity.length() < 0.3 and angular_velocity.length() < 0.3:
+		_settle_t += delta
+		if _settle_t > 0.8:
+			freeze = true; continuous_cd = false; contact_monitor = false
+			set_physics_process(false)
+	else:
+		_settle_t = 0.0
+
+func start_tipping(hole) -> void:
+	if captured_by != null or is_falling: return
+	if tilt() > TOPPLED_TILT and lowest_point() > -0.05:
+		return   # already lying on the ground beside the hole; leave it be
+	tipping_for = hole
+	_wake()
+	continuous_cd = true
+	angular_damp = 0.5
+	# real ground, not the hole's moving rim: a moving collider under a resting building shoves it sideways
+	collision_mask = 1 << 0 | 1 << 1 | 1 << 2
 	# whatever is stacked on us has to come loose too, or it would hold us up in mid-air
 	var s := stack_above
 	while s != null and is_instance_valid(s) and s.freeze:

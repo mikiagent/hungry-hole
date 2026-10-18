@@ -106,7 +106,7 @@ func process_kill(killer: Hole, victim: Hole) -> void:
 	victim.lives -= 1          # before die(): the died signal handlers read the remaining lives
 	victim.die(killer)
 	var reward := maxi(victim.points / 4, victim.level * 2)  # BotSizeToPoints is remote-only; inferred reward
-	killer.add_points(reward); killer.add_xp(victim.level * 3)
+	killer.add_points(reward); killer.add_xp(victim.level * 3, "kill")
 	killer.kills += 1
 	if now - _last_kill_time <= params.kill_cooldown: _streak += 1
 	else: _streak = 1

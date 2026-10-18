@@ -20,19 +20,29 @@ func test_fast_xp_table_levels() -> void:
 	runner.check(b.level_for_xp(3) == 1, "3 xp = L1")
 	runner.check(b.level_for_xp(4) == 2, "4 xp = L2 (original value below L10)")
 	runner.check(b.level_for_xp(87) == 10, "87 xp = L10 (original)")
-	runner.check(b.level_for_xp(460) == 20, "460 xp = L20 (doubled)")
-	runner.check(b.level_for_xp(780) == 30, "780 xp = L30 (doubled)")
-	runner.check(b.level_for_xp(780 + 60) == 31, "first overflow level costs 60")
-	runner.check(b.level_for_xp(780 + 60 + 79) == 31, "second costs 80 more")
-	runner.check(b.level_for_xp(780 + 140) == 32, "L32 at +140")
-	runner.check(b.level_for_xp(20000) < 75, "10k+ xp stays a sane size")
+	# past L10 each level's table increment is multiplied by LATE_XP_GROWTH^(L-10)
+	var l11 := 87 + roundi(23 * BalanceTable.LATE_XP_GROWTH)
+	runner.check(b.xp_for_level(11) == l11, "L11 increment scaled once")
+	var l30 := b.xp_for_level(30)
+	runner.check(l30 > 3800 and l30 < 5000, "L30 needs ~4,000-5,000 xp (got %d)" % l30)
+	var prev := 0
+	var rising := true
+	for l in range(2, 45):
+		var inc := b.xp_for_level(l) - b.xp_for_level(l - 1)
+		if l > 11 and inc < prev: rising = false
+		prev = inc
+	runner.check(rising, "level costs never drop, including into overflow")
+	runner.check(b.level_for_xp(l30 + 549) == 30, "first overflow level costs 550")
+	runner.check(b.level_for_xp(l30 + 550) == 31, "first overflow level reached at +550")
+	runner.check(b.level_for_xp(l30 + 550 + 590) == 32, "second overflow level costs 590")
+	runner.check(b.level_for_xp(20000) < 60, "20k xp stays a sane size")
 	runner.approx(b.level_progress(8, 2), 0.5, 0.001, "progress halfway L2→L3")
 func test_legacy_xp_table() -> void:
 	var b := BalanceTable.new(); b.use_fast_table = false
 	runner.check(b.level_for_xp(10) == 2, "legacy 10 xp = L2")
 	runner.check(b.level_for_xp(39) == 3, "legacy 39 xp = L3")
-	runner.check(b.level_for_xp(240) == 20, "legacy 240 xp = L20")
-	runner.check(b.level_for_xp(440) == 30, "legacy 440 xp = L30")
+	runner.check(b.level_for_xp(75) == 10, "legacy 75 xp = L10 (unchanged below L10)")
+	runner.check(b.xp_for_level(11) == 75 + roundi(5 * BalanceTable.LATE_XP_GROWTH), "legacy late growth applies too")
 func test_physics_tiers() -> void:
 	var t := ObjectPhysicsTiers.new()
 	runner.approx(t.mass_for(1), 3.0, 0.001, "mass s1")

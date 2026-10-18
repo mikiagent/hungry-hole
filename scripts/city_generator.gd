@@ -23,7 +23,8 @@ var _rng := RandomNumberGenerator.new()
 var _balance := BalanceTable.new()
 var ground_mat: ShaderMaterial
 var _cut_mats: Array[ShaderMaterial] = []
-var bounds: Rect2
+var bounds: Rect2          # current playable area (grows with zones)
+var map_rect: Rect2        # the whole map; tiles are laid out on this
 var spawn_groups: Array = []
 var object_count := 0
 var total_points := 0
@@ -61,8 +62,8 @@ const MODELS := {
 	"lamp": {"path": "res://assets/tripo/lamp_v2.glb", "scale": 3.4, "size": 1, "pts": 1, "type": 0},
 	"bench": {"path": "res://assets/tripo/bench_v2.glb", "scale": 1.9, "size": 1, "pts": 1, "type": 0},
 	"person": {"path": "res://assets/tripo/person_v3.glb", "scale": 1.4, "size": 1, "pts": 1, "type": 1},
-	"taxi": {"path": "res://assets/tripo/car_taxi.glb", "scale": 4.2, "size": 2, "pts": 2, "type": 2, "yaw": PI / 2},
-	"car": {"path": "res://assets/tripo/car_red.glb", "scale": 4.2, "size": 2, "pts": 2, "type": 2, "yaw": PI / 2},
+	"taxi": {"path": "res://assets/tripo/car_taxi.glb", "scale": 4.2, "size": 2, "pts": 2, "type": 2, "yaw": -PI / 2},
+	"car": {"path": "res://assets/tripo/car_red.glb", "scale": 4.2, "size": 2, "pts": 2, "type": 2, "yaw": -PI / 2},
 }
 var _scenes := {}
 var _aabbs := {}
@@ -137,6 +138,7 @@ func sphere_mesh(r: float) -> SphereMesh:
 func build() -> void:
 	_rng.seed = seed_value if seed_value != 0 else randi()
 	var w := tiles_x * TILE; var d := tiles_z * TILE
+	map_rect = Rect2(-w / 2.0, -d / 2.0, w, d)
 	_build_ground(w, d)
 	_layout_tiles()
 	_build_tiles()
@@ -217,7 +219,7 @@ func _layout_tiles() -> void:
 						_tile_kind[Vector2i(x, z)] = "park"
 
 func _tile_pos(x: int, z: int) -> Vector3:
-	return Vector3(bounds.position.x + (x + 0.5) * TILE, 0.0, bounds.position.y + (z + 0.5) * TILE)
+	return Vector3(map_rect.position.x + (x + 0.5) * TILE, 0.0, map_rect.position.y + (z + 0.5) * TILE)
 
 func _cut_mat(color_key: String) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
@@ -339,16 +341,16 @@ func _populate_tile(key: Vector2i) -> void:
 					elif k < 0.7: _prop_model("cardbox", q, _rng.randf() * TAU)
 					elif k < 0.8: _prop_model("dumpster", q, yaw4)
 					elif k < 0.9: _prop_model("bench", q, _rng.randf() * TAU)
-					else: _attach_mover(_prop_model("person", q, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+					else: _attach_mover(_prop_model("person", q, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, MODEL_FRONT_OFFSET)
 		"side":
-			if _rng.randf() < 0.7:
-				_prop_model(["cone", "hydrant", "mailbox", "cardbox", "planter"].pick_random(), j.call(2.2), _rng.randf() * TAU)
+			for i in (2 if _rng.randf() < 0.5 else 1):
+				_prop_model(["cone", "hydrant", "mailbox", "cardbox", "planter", "bin"].pick_random(), j.call(2.2), _rng.randf() * TAU)
 			var r := _rng.randf()
 			if r < 0.28: _prop_model("lamp", j.call(1.8))
 			elif r < 0.42: _prop_model("bench", p, _rng.randf() * PI)
 			elif r < 0.58: _prop_model("bin", j.call(1.5), _rng.randf() * TAU)
 			elif r < 0.7: _prop_model("cone", j.call(1.5), _rng.randf() * TAU)
-			elif r < 0.85: _attach_mover(_prop_model("person", j.call(1.8), _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+			elif r < 0.85: _attach_mover(_prop_model("person", j.call(1.8), _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, MODEL_FRONT_OFFSET)
 			else: _prop_model("tree_small", p, _rng.randf() * TAU)
 		"park":
 			var r := _rng.randf()
@@ -356,16 +358,18 @@ func _populate_tile(key: Vector2i) -> void:
 			elif r < 0.55: _prop_model("tree" if _rng.randf() < 0.5 else "tree_small", j.call(1.5), _rng.randf() * TAU)
 			elif r < 0.72: _prop_model("bush", j.call(1.8), _rng.randf() * TAU)
 			elif r < 0.85: _prop_model("bench", p, _rng.randf() * TAU)
-			elif r < 0.95: _attach_mover(_prop_model("person", p, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, 0.0)
+			elif r < 0.95: _attach_mover(_prop_model("person", p, _rng.randf() * TAU), Movable.Kind.PERSON, Vector3.FORWARD, 0.0, MODEL_FRONT_OFFSET)
 		"road":
 			if _rng.randf() < 0.06:
 				var yaw := 0.0 if key.x % block_tiles < 2 else PI / 2
 				if _rng.randf() < 0.5: yaw += PI
 				var car := _prop_model("taxi" if _rng.randf() < 0.4 else "car", j.call(0.8), yaw)
-				_attach_mover(car, Movable.Kind.CAR, Vector3(0, 0, 1).rotated(Vector3.UP, yaw), _rng.randf_range(6.0, 10.0), PI / 2)
+				_attach_mover(car, Movable.Kind.CAR, Vector3(0, 0, 1).rotated(Vector3.UP, yaw), _rng.randf_range(6.0, 10.0), MODEL_FRONT_OFFSET)
 
 var match_ref = null
 var mover_count := 0
+## Tripo models face local +X; Movable points local +Z along travel, so rotate by -90°.
+const MODEL_FRONT_OFFSET := -PI / 2
 const VEHICLES_CAP := 30   # LevelConfig.m_vehiclesCap
 const WALKERS_CAP := 160
 var walker_count := 0

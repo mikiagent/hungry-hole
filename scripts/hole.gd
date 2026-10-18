@@ -63,6 +63,7 @@ const PLUG_LAYER_BASE := 18           # physics layers 19..26: a floor inside ea
 var plug_layer_bit := 0
 var _plug: CollisionShape3D
 var rim_body: AnimatableBody3D
+var plug_body: AnimatableBody3D
 var rim_layer_bit := 0
 var _rim_shapes: Array[CollisionShape3D] = []
 var _scan_shape := CylinderShape3D.new()
@@ -93,19 +94,24 @@ func _build_rim() -> void:
 	rim_layer_bit = 1 << (RIM_LAYER_BASE + (player_id % 8))
 	rim_body = AnimatableBody3D.new()
 	rim_body.name = "Rim"
-	rim_body.sync_to_physics = true
+	rim_body.sync_to_physics = false   # teleport each tick: a moving kinematic surface would drag resting objects along by friction
 	rim_body.collision_layer = rim_layer_bit
 	rim_body.collision_mask = 0
 	var pm := PhysicsMaterial.new(); pm.friction = 0.45; pm.bounce = 0.0   # GameBalanceSettings.m_innerHolePhysicsMaterial
 	rim_body.physics_material_override = pm
+	# top_level: sync_to_physics only follows the body's OWN transform, never a moving parent's,
+	# so as plain children the rim and plug stayed where the hole spawned. They are moved explicitly in _sync_mouth().
+	rim_body.top_level = true
 	add_child(rim_body)
 	# plug: a disc inside the hole on its own layer; objects too big to be eaten tip onto it instead of falling through
 	plug_layer_bit = 1 << (PLUG_LAYER_BASE + (player_id % 8))
-	var plug_body := AnimatableBody3D.new(); plug_body.name = "Plug"; plug_body.sync_to_physics = true
+	plug_body = AnimatableBody3D.new(); plug_body.name = "Plug"; plug_body.sync_to_physics = false
 	plug_body.collision_layer = plug_layer_bit; plug_body.collision_mask = 0
 	plug_body.physics_material_override = pm
 	_plug = CollisionShape3D.new(); _plug.shape = CylinderShape3D.new(); plug_body.add_child(_plug)
+	plug_body.top_level = true
 	add_child(plug_body)
+	_sync_mouth()
 	for i in RIM_SEGMENTS:
 		var cs := CollisionShape3D.new(); cs.shape = BoxShape3D.new()
 		rim_body.add_child(cs); _rim_shapes.append(cs)
@@ -120,13 +126,19 @@ func _size_rim(r: float) -> void:
 		_plug.position = Vector3(0, -PLUG_DEPTH - 0.5, 0)
 	var width := maxf(4.0, r * 1.5)
 	var mid := r + width * 0.5
-	var seg_len := TAU * mid / RIM_SEGMENTS * 1.08
-	var inner_len := TAU * r / RIM_SEGMENTS
+	# tangent boxes never reach inside radius r, so size them for the OUTER circle: they overlap inside, no gaps outside
+	var seg_len := TAU * (r + width) / RIM_SEGMENTS * 1.05
 	for i in RIM_SEGMENTS:
 		var a := TAU * i / RIM_SEGMENTS
 		var cs := _rim_shapes[i]
-		(cs.shape as BoxShape3D).size = Vector3(maxf(seg_len, inner_len), 1.0, width)
+		(cs.shape as BoxShape3D).size = Vector3(seg_len, 1.0, width)
 		cs.transform = Transform3D(Basis(Vector3.UP, -a), Vector3(sin(a) * mid, -0.5, cos(a) * mid))
+
+## Keep the rim annulus and plug under the hole (they are top_level, see _build_rim).
+func _sync_mouth() -> void:
+	var xf := Transform3D(Basis(), Vector3(global_position.x, 0.0, global_position.z))
+	if rim_body: rim_body.global_transform = xf
+	if plug_body: plug_body.global_transform = xf
 
 func radius() -> float:
 	return size * 0.5
@@ -162,9 +174,11 @@ func _apply_size(s: float) -> void:
 	if _tube_mat: _tube_mat.set_shader_parameter("fade_depth", 1.5 + r * 1.4)
 	size_changed.emit(size)
 
-func add_xp(amount: int) -> void:
+var xp_log := {}   # debug: XP received per source tag (shown by --trace)
+func add_xp(amount: int, source := "obj") -> void:
 	if is_dead: return
 	xp += amount
+	xp_log[source] = int(xp_log.get(source, 0)) + amount
 	var new_level := balance.level_for_xp(xp)
 	if new_level > level:
 		set_level(new_level)
@@ -183,6 +197,7 @@ func _physics_process(delta: float) -> void:
 	velocity = Vector3(v.x, 0.0, v.z)
 	move_and_slide()
 	global_position.y = 0.0
+	_sync_mouth()
 	_scan_eatables()
 	_unblock(delta)
 	# tilt the ring a little toward travel for the "squish" feel
@@ -208,7 +223,10 @@ func _scan_eatables() -> void:
 	_scan_query.collision_mask = 1 << 1
 	_scan_query.collide_with_areas = false
 	var now := Time.get_ticks_msec() / 1000.0
-	for hit in get_world_3d().direct_space_state.intersect_shape(_scan_query, 96):
+	# result cap grows with the opening: a big hole covers hundreds of bodies (many already falling), and a fixed
+	# cap of 96 left some loose objects over the opening unchecked
+	var cap := clampi(96 + int(radius() * 10.0), 96, 640)
+	for hit in get_world_3d().direct_space_state.intersect_shape(_scan_query, cap):
 		var fo := hit.collider as FallingObject
 		if fo == null or fo.is_falling or fo.captured_by != null or now < fo.no_eat_until: continue
 		if can_eat(fo): fo.start_falling(self)
@@ -225,6 +243,13 @@ func _unblock(delta: float) -> void:
 		if not fo.is_falling or fo.captured_by != null or fo.falling_for != self: continue
 		if fo.global_position.y < -0.8: continue  # already going down
 		var stuck := now - fo.fall_started_at
+		var off := Vector2(fo.global_position.x - global_position.x, fo.global_position.z - global_position.z).length()
+		if stuck > UNBLOCK_PRIMARY_DELAY and off + fo.footprint_half < radius():
+			# wholly over the opening but jammed (on other falling objects or a toppled building): drop it straight through.
+			# Spitting it out would land it back over the opening on the invisible floor.
+			fo.collision_mask = 1 << 2
+			fo.apply_central_impulse(Vector3.DOWN * fo.mass * 2.0)
+			continue
 		if stuck > UNBLOCK_SPIT_DELAY:
 			var out := fo.global_position - global_position; out.y = 0.0
 			var f := UNBLOCK_SPIT_FORCE + fo.mass * UNBLOCK_SPIT_MASS_FACTOR
@@ -284,6 +309,7 @@ func respawn(at: Vector3, protection: float = 2.0) -> void:
 	is_dead = false
 	global_position = Vector3(at.x, 0.0, at.z)
 	set_level(level, true)
+	_sync_mouth()
 	visible = true
 	name_label.modulate.a = 1.0
 	eat_trigger.monitoring = true

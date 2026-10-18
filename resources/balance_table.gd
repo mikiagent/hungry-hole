@@ -15,8 +15,14 @@ extends Resource
 @export var max_level: int = 30
 ## Past max_level holes keep growing (user: a champion must be able to eat everything): each extra level costs
 ## OVERFLOW_XP and multiplies the diameter by OVERFLOW_GROWTH. Speed stays at the max-level value.
-const OVERFLOW_XP := 60
-const OVERFLOW_XP_STEP := 20     # the k-th overflow level costs 60 + 20k more than the previous one
+const OVERFLOW_XP := 550
+const OVERFLOW_XP_STEP := 40     # the k-th overflow level costs 550 + 40k (never cheaper than the last regular level)
+## Late-game pacing (user: holes reached the win size in about a minute): every level past LATE_XP_FROM costs
+## LATE_XP_GROWTH^(level - LATE_XP_FROM) times its table increment. Big holes clear whole blocks of 25-XP buildings,
+## so a flat table snowballs. With 1.15, level 30 needs ~3,700 XP instead of 780.
+const LATE_XP_FROM := 10
+const LATE_XP_GROWTH := 1.15
+var _cum_cache: Array[int] = []
 const OVERFLOW_GROWTH := 1.03
 
 ## Smallest level whose opening a footprint of this horizontal diagonal can pass through.
@@ -44,10 +50,17 @@ func xp_for_level(level: int) -> int:
 	if level <= 1:
 		return 0
 	var n := mini(level_count(), t.size())
+	if _cum_cache.size() != n:
+		_cum_cache.clear(); _cum_cache.append(0)
+		for l in range(2, n + 1):
+			var inc: int = t[l - 1] - t[l - 2]
+			if l > LATE_XP_FROM: inc = roundi(inc * pow(LATE_XP_GROWTH, l - LATE_XP_FROM))
+			if l > LATE_XP_FROM + 1: inc = maxi(inc, _cum_cache[-1] - _cum_cache[-2])   # late levels never cost less than the one before
+			_cum_cache.append(_cum_cache[-1] + inc)
 	if level > n:
 		var k := level - n
-		return t[n - 1] + k * OVERFLOW_XP + OVERFLOW_XP_STEP * k * (k - 1) / 2
-	return t[level - 1]
+		return _cum_cache[n - 1] + k * OVERFLOW_XP + OVERFLOW_XP_STEP * k * (k - 1) / 2
+	return _cum_cache[level - 1]
 
 ## Level reached for a cumulative XP value.
 func level_for_xp(xp: int) -> int:

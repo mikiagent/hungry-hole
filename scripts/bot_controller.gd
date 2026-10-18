@@ -17,6 +17,7 @@ const DECISION_INTERVAL := 0.1   # BotServiceConfig.m_decisionIntervalMs
 const TARGET_REACHED := 0.1       # BotHoleController.TargetReachedDistance
 const WAYPOINT_MIN := 10.0
 const WAYPOINT_MAX := 200.0
+const HUNT_SEARCH := 60.0
 
 func setup(h: Hole, m, p: BotProfile) -> void:
 	hole = h; match_ref = m; profile = p if p else BotProfile.normal()
@@ -65,8 +66,8 @@ func _decide() -> void:
 		return
 	# 3. aggression: chase a vulnerable (smaller) hole: always if it's close, otherwise with a probability that ramps up
 	var victim := _closest_vulnerable_hole()
-	var close_prey: bool = victim != null and profile.hunt_radius > 0.0 and hole.global_position.distance_to(victim.global_position) < profile.hunt_radius + hole.radius()
-	if victim != null and (close_prey or (aggressivity() > 0.0 and randf() < aggressivity())):
+	var close_prey: bool = victim != null and _elapsed > 30.0 and profile.hunt_radius > 0.0 and hole.global_position.distance_to(victim.global_position) < profile.hunt_radius + hole.radius()
+	if victim != null and (close_prey or (aggressivity() > 0.0 and randf() < aggressivity() * 0.35)):
 		if true:
 			target = victim; target_is_hole = true
 			_target_timer = randf_range(profile.hole_chase_duration.x, profile.hole_chase_duration.y)
@@ -136,9 +137,10 @@ func _closest_vulnerable_hole() -> Hole:
 	for b in match_ref.bots:
 		if b != self and is_instance_valid(b.target) and b.target is Hole and not (b.target as Hole).is_bot: hunters += 1
 	for h in match_ref.holes:
-		if h == hole or h.is_dead or h.level >= hole.level or h.is_protected(): continue
+		if h == hole or h.is_dead or h.level > hole.level - 2 or h.is_protected(): continue   # prey must be clearly smaller
 		if not h.is_bot and hunters >= profile.max_player_hunters: continue
 		var d: float = hole.global_position.distance_to(h.global_position)
+		if d > HUNT_SEARCH + hole.radius() * 3.0: continue   # bots only notice prey near them
 		if d < bd: bd = d; best = h
 	return best
 

@@ -4,7 +4,12 @@ var _players: Array[AudioStreamPlayer] = []
 var _streams := {}
 const POOL := 12
 
+signal sound_changed(on: bool)
+var _session_mute := false   # --mute: silence this run without touching the saved setting
+
 func _ready() -> void:
+	_session_mute = OS.get_cmdline_user_args().has("--mute") or OS.get_cmdline_args().has("--mute")
+	_apply_mute()
 	for i in POOL:
 		var p := AudioStreamPlayer.new()
 		p.bus = "Master"
@@ -24,8 +29,20 @@ func _ready() -> void:
 		if ResourceLoader.exists(final_path):
 			_streams[tag] = load(final_path)
 
+## Sound on/off is the saved "sound" setting; it mutes the whole Master bus (effects and any future music).
+func is_sound_on() -> bool:
+	return bool(SaveData.get_setting("sound", true))
+
+func set_sound(on: bool) -> void:
+	SaveData.set_setting("sound", on)
+	_apply_mute()
+	sound_changed.emit(on)
+
+func _apply_mute() -> void:
+	AudioServer.set_bus_mute(AudioServer.get_bus_index("Master"), _session_mute or not is_sound_on())
+
 func play(tag: String, pitch_jitter: float = 0.1) -> void:
-	if not SaveData.get_setting("sound", true):
+	if _session_mute or not is_sound_on():
 		return
 	if not _streams.has(tag):
 		return
