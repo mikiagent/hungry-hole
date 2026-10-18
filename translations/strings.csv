@@ -1,0 +1,33 @@
+keys,en
+TXT_PLAY,PLAY
+TXT_TAP_TO_START,Tap to start
+TXT_DRAG_TO_MOVE,"DRAG TO MOVE, EAT & GROW!"
+TXT_GAME_LEVEL,Size %d
+TXT_GAME_SIZE_MAX,Size Max!
+TXT_GAME_OVER_TIME_OUT,TIME OUT!
+TXT_GAME_OVER_EATEN,EATEN
+TXT_GAME_OVER_VICTORY,VICTORY
+TXT_GAME_EATEN_BY,You were swallowed by %s
+TXT_GAME_RANKING,Ranking
+TXT_TAP_CONTINUE,Tap to continue
+TXT_PAUSED,Paused
+TXT_RESUME,Resume
+TXT_SOUND,Sound
+TXT_BEST,Best: %d
+TXT_TIP_0,A hole can swallow a smaller hole
+TXT_TIP_1,Bigger things give more points
+TXT_TIP_2,You can eat anything once you're big enough
+TXT_TIP_3,"If it won't fit, move on"
+TXT_TIP_4,Start small and keep growing
+TXT_TIP_5,Watch out for bigger holes
+TXT_TIP_6,Eat everything!
+TXT_KILL_0,GULP!
+TXT_KILL_1,DOUBLE GULP!
+TXT_KILL_2,TRIPLE GULP!
+TXT_KILL_3,MULTI GULP!
+TXT_KILL_4,MEGA GULP!
+TXT_KILL_5,ULTRA GULP!
+TXT_KILL_6,MONSTER GULP!
+TXT_KILL_7,GULPING SPREE!
+TXT_KILL_8,RAMPAGE!
+TXT_KILL_9,UNSTOPPABLE!

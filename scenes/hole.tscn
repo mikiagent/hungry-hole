@@ -1,0 +1,78 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/hole.gd" id="1"]
+
+[sub_resource type="CylinderShape3D" id="body"]
+radius = 0.3
+height = 1.0
+
+[sub_resource type="CylinderShape3D" id="eat"]
+radius = 0.9
+height = 3.0
+
+[sub_resource type="CylinderShape3D" id="collect"]
+radius = 1.5
+height = 2.0
+
+[sub_resource type="TorusMesh" id="ring"]
+inner_radius = 0.9
+outer_radius = 1.0
+rings = 32
+ring_segments = 10
+
+[sub_resource type="CylinderMesh" id="tube"]
+top_radius = 0.98
+bottom_radius = 0.98
+height = 30.0
+radial_segments = 32
+rings = 1
+
+[sub_resource type="StandardMaterial3D" id="tube_mat"]
+cull_mode = 1
+albedo_color = Color(0.078, 0.078, 0.125, 1)
+roughness = 1.0
+
+[node name="Hole" type="CharacterBody3D"]
+script = ExtResource("1")
+motion_mode = 1
+
+[node name="Body" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+shape = SubResource("body")
+
+[node name="EatTrigger" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="EatTrigger"]
+shape = SubResource("eat")
+
+[node name="CollectTrigger" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2.5, 0)
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="CollectTrigger"]
+shape = SubResource("collect")
+
+[node name="Visuals" type="Node3D" parent="."]
+
+[node name="Ring" type="MeshInstance3D" parent="Visuals"]
+transform = Transform3D(1, 0, 0, 0, 0.6, 0, 0, 0, 1, 0, 0.16, 0)
+mesh = SubResource("ring")
+
+[node name="Tube" type="MeshInstance3D" parent="Visuals"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -15.0, 0)
+mesh = SubResource("tube")
+material_override = SubResource("tube_mat")
+
+[node name="Crown" type="MeshInstance3D" parent="Visuals"]
+transform = Transform3D(0.4, 0, 0, 0, 0.4, 0, 0, 0, 0.4, 0, 1.2, 0)
+visible = false
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
+billboard = 1
+no_depth_test = true
+pixel_size = 0.02
+font_size = 34
+outline_size = 10
