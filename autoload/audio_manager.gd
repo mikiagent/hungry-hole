@@ -30,8 +30,18 @@ func _ready() -> void:
 			_streams[tag] = load(final_path)
 
 ## Sound on/off is the saved "sound" setting; it mutes the whole Master bus (effects and any future music).
+## A first launch (nothing saved) uses the project setting game/audio/sound_on_by_default: off while testing, on for releases.
 func is_sound_on() -> bool:
-	return bool(SaveData.get_setting("sound", true))
+	return bool(SaveData.get_setting("sound", ProjectSettings.get_setting("game/audio/sound_on_by_default", true)))
+
+## Master volume, 0..1, saved as the "volume" setting.
+const DEFAULT_VOLUME := 0.4
+func get_volume() -> float:
+	return clampf(float(SaveData.get_setting("volume", DEFAULT_VOLUME)), 0.0, 1.0)
+
+func set_volume(v: float) -> void:
+	SaveData.set_setting("volume", clampf(v, 0.0, 1.0))
+	_apply_mute()
 
 func set_sound(on: bool) -> void:
 	SaveData.set_setting("sound", on)
@@ -39,7 +49,9 @@ func set_sound(on: bool) -> void:
 	sound_changed.emit(on)
 
 func _apply_mute() -> void:
-	AudioServer.set_bus_mute(AudioServer.get_bus_index("Master"), _session_mute or not is_sound_on())
+	var bus := AudioServer.get_bus_index("Master")
+	AudioServer.set_bus_mute(bus, _session_mute or not is_sound_on() or get_volume() <= 0.0)
+	AudioServer.set_bus_volume_db(bus, linear_to_db(maxf(get_volume(), 0.001)))
 
 func play(tag: String, pitch_jitter: float = 0.1) -> void:
 	if _session_mute or not is_sound_on():

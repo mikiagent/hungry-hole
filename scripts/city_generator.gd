@@ -34,6 +34,7 @@ var _tile_kind := {}   # Vector2i -> "road"|"side"|"block"|"park"
 const ZONE_EDGES := [0.4, 0.7, 1.0]
 const UNLOCK_FRACTION := 0.3
 const TILES_PER_FRAME := 220
+const WEB_PROP_KEEP := 0.5   # share of small-prop tiles kept on the web
 signal zone_unlocked(index: int, rect: Rect2)
 var zone_index := 0
 var eaten_count := 0
@@ -307,6 +308,9 @@ func _populate_tile(key: Vector2i) -> void:
 	var cx := tiles_x / 2; var cz := tiles_z / 2
 	var p := _tile_pos(key.x, key.y)
 	var kind: String = _tile_kind[key]
+	# Browser builds step physics single-threaded in wasm, so they skip a share of the small-prop tiles (buildings and cars stay).
+	var building_tile: bool = kind == "block" and (key.x % block_tiles) % 2 == 1 and (key.y % block_tiles) % 2 == 1
+	if OS.has_feature("web") and kind != "road" and not building_tile and _rng.randf() > WEB_PROP_KEEP: return
 	var nx: float = absf(key.x - cx) / float(tiles_x / 2); var nz: float = absf(key.y - cz) / float(tiles_z / 2)
 	var zone: float = maxf(nx, nz)
 	var downtown: bool = zone < 0.12

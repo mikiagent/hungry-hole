@@ -13,6 +13,10 @@ Events="*res://autoload/events.gd"
 SaveData="*res://autoload/save_data.gd"
 AudioManager="*res://autoload/audio_manager.gd"
 
+[game]
+
+audio/sound_on_by_default=true
+
 [gui]
 
 theme/custom="res://assets/fonts/game_theme.tres"
@@ -104,6 +108,8 @@ jolt_physics_3d/limits/temporary_memory_buffer_size=128
 3d/default_gravity=80.0
 
 [rendering]
+
+textures/vram_compression/import_etc2_astc=true
 lights_and_shadows/directional_shadow/size=2048
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
 anti_aliasing/quality/msaa_3d=2

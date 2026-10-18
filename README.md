@@ -2,6 +2,8 @@
 
 ![Hungry Hole gameplay](docs/cover.png)
 
+**Play it in the browser: [hungry-hole.vercel.app](https://hungry-hole.vercel.app)**
+
 A bright, toy-city "eat everything" arena game for Godot 4. You and six bots are holes in the ground. Anything that fits through your opening falls in and makes you bigger. Things that don't fit tip over when you clip their corner. Smaller holes are food too.
 
 It's a fan remake inspired by Hole.io, built from scratch. All art, models, sounds and code are original to this project. It is not affiliated with or endorsed by the makers of Hole.io.
@@ -15,7 +17,7 @@ It's a fan remake inspired by Hole.io, built from scratch. All art, models, soun
 - The first hole to reach 90 m wins. Otherwise the most points after 5 minutes wins, or the last hole with lives left.
 - The city is built in three rings. Once 30% of what's there has been eaten, the next ring spawns in and the walls move out.
 - Past level 30 a hole keeps growing slowly, so a champion can eventually eat everything.
-- Sound can be turned on and off with the button under the leaderboard or in the pause menu.
+- Sound can be turned on and off with the button under the leaderboard or in the pause menu, and the pause menu has a volume slider.
 
 ## Run it
 
@@ -37,6 +39,20 @@ Debug flags go after `--`:
 | `--trace` | Print every hole's level, XP and lives every 5 seconds |
 | `--diag-eat` | Report objects that should have fallen in but didn't |
 | `--topple-test`, `--edge-test`, `--kill-test`, `--overlap-test`, `--unlock-test` | Scripted physics and rules scenarios |
+
+In a browser build the same flags go in the URL without the dashes, for example `index.html?autoplay&trace`.
+
+## Web build
+
+The `Web` export preset builds a single-threaded WebAssembly version with the Compatibility renderer, so it needs no special server headers. Export it with the standard (non-.NET) Godot editor, since the .NET editor can't export to the web:
+
+```bash
+godot --headless --path . --export-release "Web" build/web/index.html
+```
+
+`build/web` is a static site; the live copy is deployed from there with `vercel deploy --prod`. Browser builds differ from desktop in two ways: they keep half of the small-prop tiles (buildings and cars stay) because physics runs single-threaded in wasm, and they use a fixed ambient colour and a weaker sun because the Compatibility renderer lights flat surfaces much brighter than Forward+.
+
+The project setting `game/audio/sound_on_by_default` decides whether sound starts on for a new player. Set it to `false` while testing.
 
 ## Tests
 

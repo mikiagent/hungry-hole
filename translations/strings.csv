@@ -15,6 +15,7 @@ TXT_RESUME,Resume
 TXT_SOUND,Sound
 TXT_SOUND_ON,Sound On
 TXT_SOUND_OFF,Sound Off
+TXT_VOLUME,Volume
 TXT_BEST,Best: %d
 TXT_TIP_0,A hole can swallow a smaller hole
 TXT_TIP_1,Bigger things give more points

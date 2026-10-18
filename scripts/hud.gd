@@ -14,7 +14,7 @@ var _joystick: Control
 var _joy_active := false; var _joy_origin := Vector2.ZERO; var _joy_cur := Vector2.ZERO
 var _camera: Camera3D
 var _killer_name := ""
-var _lives_label: Label
+var _lives_label: Hearts
 var _goal_label: Label
 var _respawn_label: Label
 var _respawn_at := 0.0
@@ -68,7 +68,7 @@ func _build() -> void:
 	var bg := StyleBoxFlat.new(); bg.bg_color = Color(0.17, 0.18, 0.28, 0.7); bg.set_corner_radius_all(13)
 	var fg := StyleBoxFlat.new(); fg.bg_color = Color("6BCB77"); fg.set_corner_radius_all(13)
 	_xp_bar.add_theme_stylebox_override("background", bg); _xp_bar.add_theme_stylebox_override("fill", fg); sp.add_child(_xp_bar)
-	_lives_label = Label.new(); _style_label(_lives_label, 40, Color("FF5252")); sp.add_child(_lives_label)
+	_lives_label = Hearts.new(); sp.add_child(_lives_label)
 	_goal_label = Label.new(); _style_label(_goal_label, 28, Color("FFF8E7")); sp.add_child(_goal_label)
 	_respawn_label = Label.new(); _respawn_label.set_anchors_preset(Control.PRESET_CENTER); _respawn_label.position = Vector2(0, 760); _respawn_label.size = Vector2(1080, 140)
 	_respawn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(_respawn_label, 80, Color("FFD93D")); _respawn_label.visible = false; root.add_child(_respawn_label)
@@ -96,9 +96,17 @@ func _build() -> void:
 	_pause_panel.process_mode = Node.PROCESS_MODE_ALWAYS; root.add_child(_pause_panel)
 	var pv := VBoxContainer.new(); pv.add_theme_constant_override("separation", 24); _pause_panel.add_child(pv)
 	var pt := Label.new(); pt.text = tr("TXT_PAUSED"); pt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(pt, 72, Color("FF9A01")); pv.add_child(pt)
-	var snd := CheckButton.new(); snd.text = tr("TXT_SOUND"); snd.button_pressed = SaveData.get_setting("sound", true); snd.add_theme_font_size_override("font_size", 44); snd.add_theme_color_override("font_color", Color("2C2F48"))
+	var snd := CheckButton.new(); snd.text = tr("TXT_SOUND"); snd.button_pressed = AudioManager.is_sound_on(); snd.add_theme_font_size_override("font_size", 44); snd.add_theme_color_override("font_color", Color("2C2F48"))
 	snd.toggled.connect(func(on): if on != AudioManager.is_sound_on(): AudioManager.set_sound(on)); pv.add_child(snd)
 	AudioManager.sound_changed.connect(func(on): snd.set_pressed_no_signal(on))
+	var vrow := HBoxContainer.new(); vrow.add_theme_constant_override("separation", 20); pv.add_child(vrow)
+	var vl := Label.new(); vl.text = tr("TXT_VOLUME"); _style_label(vl, 44, Color("2C2F48")); vrow.add_child(vl)
+	var vol := HSlider.new(); vol.min_value = 0.0; vol.max_value = 1.0; vol.step = 0.05; vol.value = AudioManager.get_volume()
+	vol.size_flags_horizontal = Control.SIZE_EXPAND_FILL; vol.size_flags_vertical = Control.SIZE_SHRINK_CENTER; vol.custom_minimum_size = Vector2(0, 60)
+	var track := StyleBoxFlat.new(); track.bg_color = Color("D9D2C5"); track.set_corner_radius_all(10); track.content_margin_top = 10; track.content_margin_bottom = 10
+	var fill := track.duplicate(); fill.bg_color = Color("FF9A01")
+	vol.add_theme_stylebox_override("slider", track); vol.add_theme_stylebox_override("grabber_area", fill); vol.add_theme_stylebox_override("grabber_area_highlight", fill)
+	vol.value_changed.connect(func(v): AudioManager.set_volume(v)); vrow.add_child(vol)
 	# always-visible sound toggle under the leaderboard
 	var sb := Button.new(); sb.focus_mode = Control.FOCUS_NONE; sb.position = Vector2(820, 540); sb.custom_minimum_size = Vector2(230, 84)
 	sb.add_theme_font_size_override("font_size", 38); sb.add_theme_color_override("font_color", Color.WHITE); sb.add_theme_color_override("font_hover_color", Color.WHITE)
@@ -149,11 +157,11 @@ func _on_level(level: int) -> void:
 	_size_label.text = tr("TXT_GAME_LEVEL") % level
 
 func _refresh_lives() -> void:
-	if _lives_label: _lives_label.text = "♥".repeat(maxi(player.lives, 0)) + "♡".repeat(maxi(match_ref.params.lives - player.lives, 0))
+	if _lives_label: _lives_label.set_lives(maxi(player.lives, 0), match_ref.params.lives)
 
 func _process(_d: float) -> void:
 	if player: _xp_bar.value = player.balance.level_progress(player.xp, player.level)
-	if _lives_label and _lives_label.text == "": _refresh_lives()
+	if _lives_label and _lives_label.total == 0: _refresh_lives()
 	if _goal_label: _goal_label.text = "%.0f / %d m" % [player.size, int(match_ref.params.win_diameter)]
 	var left := _respawn_at - Time.get_ticks_msec() / 1000.0
 	_respawn_label.visible = player.is_dead and player.lives > 0 and left > 0.0
@@ -214,3 +222,32 @@ func _on_match_ended(result: int, ranking: Array) -> void:
 	var best := Label.new(); best.text = tr("TXT_BEST") % SaveData.get_best_score(match_ref.params.mode_id); best.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(best, 32, Color("2C3E50")); v.add_child(best)
 	var hint := Label.new(); hint.text = tr("TXT_TAP_CONTINUE"); hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _style_label(hint, 36, Color("FF9A01")); v.add_child(hint)
 	_gameover.visible = true
+
+
+## Lives drawn as heart shapes; a ♥ glyph needs a system font fallback, which browser builds don't have.
+class Hearts extends Control:
+	const SIZE := 40.0
+	const GAP := 8.0
+	var full := 0
+	var total := 0
+	var _shape := PackedVector2Array()
+
+	func _init() -> void:
+		for i in 32:   # classic heart curve, scaled to SIZE
+			var t := TAU * i / 32.0
+			var x := 16.0 * pow(sin(t), 3)
+			var y := -(13.0 * cos(t) - 5.0 * cos(2.0 * t) - 2.0 * cos(3.0 * t) - cos(4.0 * t))
+			_shape.append(Vector2(x, y + 2.0) * (SIZE / 34.0) + Vector2(SIZE / 2.0, SIZE / 2.0))
+
+	func set_lives(f: int, t: int) -> void:
+		full = f; total = t
+		custom_minimum_size = Vector2(total * (SIZE + GAP), SIZE)
+		queue_redraw()
+
+	func _draw() -> void:
+		for i in total:
+			var pts := PackedVector2Array()
+			for p in _shape: pts.append(p + Vector2(i * (SIZE + GAP), 0))
+			if i < full: draw_colored_polygon(pts, Color("FF5252"))
+			var outline := pts.duplicate(); outline.append(pts[0])
+			draw_polyline(outline, Color("2C2F48") if i < full else Color("FF5252"), 3.0, true)

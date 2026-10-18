@@ -116,7 +116,12 @@ func _ready() -> void:
 		_start()
 
 func _parse_args() -> void:
-	for a in OS.get_cmdline_user_args():
+	var args := OS.get_cmdline_user_args()
+	if OS.has_feature("web"):   # browser builds take the same flags from the URL: index.html?autoplay&trace
+		var q = JavaScriptBridge.eval("location.search")
+		if q is String and q.length() > 1:
+			for part in q.substr(1).split("&", false): args.append("--" + part.uri_decode())
+	for a in args:
 		if a.begins_with("--screenshot="): _screenshot_path = a.substr(13)
 		if a.begins_with("--quit-after="): _auto_quit = float(a.substr(13))
 		if a == "--autoplay": _autoplay = true
@@ -139,6 +144,11 @@ func _build_world() -> void:
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY; e.ambient_light_energy = 0.9
 	e.fog_enabled = true; e.fog_mode = Environment.FOG_MODE_DEPTH; e.fog_light_color = Color("CDEFFF"); e.fog_depth_begin = 300.0; e.fog_depth_end = 1200.0; e.fog_density = 0.6; e.fog_sky_affect = 0.0
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		# Compatibility (web) ignores the sky ambient energy and floods flat surfaces with sky blue, and its sun reads brighter;
+		# a fixed ambient colour and a weaker sun match the Forward+ look.
+		e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR; e.ambient_light_color = Color("9CC8F0"); e.ambient_light_energy = 0.45
+		sun.light_energy = 0.6
 	env.environment = e; add_child(env)
 
 func _start() -> void:
@@ -246,7 +256,7 @@ func _process(delta: float) -> void:
 						elif b.target is FallingObject: tgt = "obj"
 						elif b.target is Hole: tgt = "hole"
 				parts.append("%s L%d xp=%d %s lives=%d %s" % [h.display_name, h.level, h.xp, h.xp_log, h.lives, tgt])
-			print("[trace] t=%.0f fps=%d eatables=%d | %s" % [match_node.params.duration_seconds - match_node.time_left, Engine.get_frames_per_second(), match_node.eatables_snapshot().size(), " ; ".join(parts)])
+			print("[trace] t=%.0f fps=%d cpu=%.1f+%.1f ms eatables=%d | %s" % [match_node.params.duration_seconds - match_node.time_left, Engine.get_frames_per_second(), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, match_node.eatables_snapshot().size(), " ; ".join(parts)])
 	if _diag and state == State.PLAYING: _diag_tick(delta)
 	city.update_hole_uniforms(match_node.holes)
 	for h in match_node.holes: h.update_occluders(match_node.holes)
